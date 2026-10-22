@@ -1,0 +1,33 @@
+# データ(フォルダ構成だけ管理し、中身は管理しない)
+data/*
+!data/.gitkeep
+*.parquet
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+
+# C++ / CUDA / CMake
+build/
+cmake-build-*/
+*.o
+*.so
+*.ptx
+
+# 秘密情報
+.env
+.env.*
+!.env.example
+
+# Claude Code 個人設定
+.claude/settings.local.json
+
+# OS
+.DS_Store
