@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from backend.api.schemas import (
+    CorporateActionOut,
     DailyOut,
     DataInfoOut,
     EventOut,
@@ -18,7 +19,6 @@ from backend.api.schemas import (
     WarmupOut,
 )
 from backend.marketdata.models import DailyBar, DataInfo, SymbolInfo
-from backend.marketdata.synthetic import DemoDataSource
 from engine.reference import BacktestResult, Bar
 from engine.reference.types import WarmupInfo
 
@@ -31,8 +31,6 @@ NOTE_MESSAGES = {
     "demo_data": "架空データです。実在の銘柄・株価ではありません",
     "execution_assumption": "寄付きの成行注文で、始値で約定できたと仮定しています(ストップ高・ストップ安、配当、税金は考慮していません)",
 }
-
-_demo = DemoDataSource()
 
 
 def to_engine_bars(bars: Sequence[DailyBar]) -> list[Bar]:
@@ -52,8 +50,8 @@ def to_engine_bars(bars: Sequence[DailyBar]) -> list[Bar]:
     ]
 
 
-def symbol_out(info: SymbolInfo, source_id: str) -> SymbolOut:
-    description = _demo.describe(info.symbol_id) if info.symbol_id.market == "DEMO" else None
+def symbol_out(info: SymbolInfo, source_id: str, description: str | None = None) -> SymbolOut:
+    """銘柄の情報。description は架空銘柄で確かめられる境界ケースの説明(データソースの describe)。"""
     return SymbolOut(
         id=str(info.symbol_id),
         market=info.symbol_id.market,
@@ -73,7 +71,28 @@ def data_info_out(info: DataInfo) -> DataInfoOut:
         source_label=info.source_label,
         license_note=info.license_note,
         fetched_at=info.fetched_at,
+        warning=info.warning,
     )
+
+
+def changes_shares(bar: DailyBar) -> bool:
+    """持ち株数が変わる日か(分割・併合で、調整係数が1でない日。docs/mvp.md 2.8 と同じ条件)。"""
+    return bar.ex_rt in (1, 2) and bar.adj_factor not in (None, 1.0)
+
+
+def corporate_actions_out(bars: Sequence[DailyBar]) -> list[CorporateActionOut]:
+    """権利落ちの日(調整係数が1でない日と、権利落ちの種類が入っている日)。"""
+    return [
+        CorporateActionOut(
+            date=bar.date,
+            ex_rt=bar.ex_rt,
+            label=EX_RT_LABELS.get(bar.ex_rt or 0, "権利落ち"),
+            adj_factor=bar.adj_factor if bar.adj_factor is not None else 1.0,
+            changes_shares=changes_shares(bar),
+        )
+        for bar in bars
+        if bar.ex_rt is not None or bar.adj_factor not in (None, 1.0)
+    ]
 
 
 def warmup_out(w: WarmupInfo) -> WarmupOut:
@@ -94,8 +113,10 @@ def warmup_out(w: WarmupInfo) -> WarmupOut:
     )
 
 
-def notes_out(result: BacktestResult, market: str, license_note: str) -> list[NoteOut]:
+def notes_out(result: BacktestResult, market: str, data_info: DataInfo) -> list[NoteOut]:
     notes: list[NoteOut] = []
+    if data_info.warning:
+        notes.append(NoteOut(kind="stale_data", message=data_info.warning))
     if result.notes.open_position_at_end:
         notes.append(NoteOut(kind="liquidation", message=NOTE_MESSAGES["liquidation"]))
     if result.notes.annualized_is_reference:
@@ -114,14 +135,17 @@ def notes_out(result: BacktestResult, market: str, license_note: str) -> list[No
         notes.append(
             NoteOut(
                 kind="insufficient_cash",
-                message=f"資金不足で約定しなかった買い注文が {result.insufficient_cash_count} 回ありました(売買単位の100株を買えなかった)",
+                message=(
+                    f"資金不足で約定しなかった買い注文が {result.insufficient_cash_count} 回ありました"
+                    f"(売買単位の{result.params.lot_size}株を買えなかった)"
+                ),
             )
         )
     if market == "DEMO":
         notes.append(NoteOut(kind="demo_data", message=NOTE_MESSAGES["demo_data"]))
     else:
         notes.append(NoteOut(kind="survivorship", message=NOTE_MESSAGES["survivorship"]))
-        notes.append(NoteOut(kind="data_license", message=license_note))
+        notes.append(NoteOut(kind="data_license", message=data_info.license_note))
     notes.append(
         NoteOut(kind="execution_assumption", message=NOTE_MESSAGES["execution_assumption"])
     )

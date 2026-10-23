@@ -1,12 +1,15 @@
 """画面に出す戦略の一覧と、パラメータの定義(既定値・範囲・説明)。
 
 MVP で実際に計算できるのは移動平均クロスだけ。ほかは「今後追加予定」として一覧にだけ出す。
-既定値と範囲は docs/mvp.md 4.2・4.3 に合わせる。
+既定値と範囲は docs/mvp.md 4.2・4.3 に合わせる。範囲の数値はここが正で、API の入力チェック
+(backend/api/validation.py)も画面の入力チェックも、この定義を使う。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+from engine.reference.types import MAX_WINDOW
 
 
 @dataclass(frozen=True)
@@ -39,7 +42,7 @@ MA_CROSS_PARAMS = (
         kind="integer",
         default=5,
         minimum=1,
-        maximum=None,
+        maximum=MAX_WINDOW,
         step=1,
         help="直近何営業日の終値で短期線を作るか。長期の日数より小さくする",
     ),
@@ -48,10 +51,10 @@ MA_CROSS_PARAMS = (
         label="長期移動平均の日数",
         kind="integer",
         default=25,
-        minimum=2,
-        maximum=None,
+        minimum=1,
+        maximum=MAX_WINDOW,
         step=1,
-        help="直近何営業日の終値で長期線を作るか",
+        help="直近何営業日の終値で長期線を作るか。1000日まで",
     ),
     ParamSpec(
         key="fee_rate_pct",
@@ -93,8 +96,8 @@ STRATEGIES: tuple[StrategySpec, ...] = (
         name="移動平均クロス",
         summary="短期線が長期線を上に抜けたら買い、下に抜けたら売る",
         description=(
-            "当日の終値で、短期移動平均が長期移動平均を上抜けたら翌営業日の始値で買い、"
-            "下抜けたら翌営業日の始値で全株を売ります。買いのみ(空売りはしません)。"
+            "当日の終値で、短期移動平均が長期移動平均を上抜けたら、次に売買が成立した日の始値で買い、"
+            "下抜けたら同じように全株を売ります。買いのみ(空売りはしません)。期間の最終日に出たシグナルは約定しません。"
             "移動平均は、分割などの影響をその日までに分かる情報だけで調整した終値で計算します。"
         ),
         available=True,

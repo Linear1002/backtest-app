@@ -28,7 +28,7 @@ lint:
 
 # API サーバー(http://localhost:8000)
 dev-api:
-	uv run uvicorn backend.main:app --reload --port 8000
+	uv run uvicorn backend.main:create_app --factory --reload --port 8000
 
 # 画面の開発サーバー(http://localhost:3000)
 dev-web:

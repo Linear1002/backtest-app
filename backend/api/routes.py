@@ -11,7 +11,6 @@ from backend.api import convert
 from backend.api.schemas import (
     BacktestOut,
     BacktestRequest,
-    CorporateActionOut,
     DataSourceOut,
     DateRangeOut,
     EngineOut,
@@ -29,11 +28,8 @@ from backend.api.schemas import (
 )
 from backend.api.validation import InputValidationError, validate_params, validate_period
 from backend.engines import get_engine, list_engines
-from backend.marketdata.jquants import LICENSE_NOTE as JQUANTS_LICENSE
-from backend.marketdata.jquants import JQuantsDataSource
 from backend.marketdata.models import SymbolId
 from backend.marketdata.service import MarketDataService
-from backend.marketdata.synthetic import LICENSE_NOTE as DEMO_LICENSE
 from backend.strategies import STRATEGIES, STRATEGIES_BY_ID
 from engine.reference.types import TRADING_DAYS_PER_YEAR
 
@@ -65,10 +61,10 @@ def meta(service: Service) -> MetaOut:
     sources = [
         DataSourceOut(
             id=source.source_id,
-            label=getattr(source, "source_label", source.source_id),
+            label=source.source_label,
             markets=list(source.markets),
-            license_note=JQUANTS_LICENSE if isinstance(source, JQuantsDataSource) else DEMO_LICENSE,
-            can_fetch=source.has_client if isinstance(source, JQuantsDataSource) else True,
+            license_note=source.license_note,
+            can_fetch=source.can_fetch,
         )
         for source in service.sources
     ]
@@ -89,7 +85,7 @@ def search_symbols(
     items = []
     for info in service.search(q, limit=limit):
         source = service.source_for(info.symbol_id)
-        items.append(convert.symbol_out(info, source.source_id))
+        items.append(convert.symbol_out(info, source.source_id, service.describe(info.symbol_id)))
     return SymbolListOut(items=items)
 
 
@@ -98,32 +94,33 @@ def symbol_detail(symbol_id: str, service: Service) -> SymbolDetailOut:
     """銘柄の詳細(データの範囲・権利落ち・売買不成立の日数)。"""
     sid = SymbolId.parse(symbol_id)
     source = service.source_for(sid)
-    bars = service.get_daily_bars(sid)
-    available = service.get_available_range(sid)
-    market = sid.market_config
+    service.require_listed(sid)  # 上場廃止などで MVP の対象外なら 404(docs/mvp.md 3.6)
+    data = service.load(sid)
     return SymbolDetailOut(
-        symbol=convert.symbol_out(service.find_symbol(sid), source.source_id),
-        market=MarketOut(
-            code=market.code, name=market.name, currency=market.currency, lot_size=market.lot_size
+        symbol=convert.symbol_out(
+            service.find_symbol(sid), source.source_id, service.describe(sid)
         ),
+        market=market_out(sid),
         range=DateRangeOut(
-            first_date=available.first,
-            last_date=available.last,
-            business_days=len(bars),
-            trading_days=sum(1 for bar in bars if bar.close is not None),
+            first_date=data.available.first,
+            last_date=data.available.last,
+            business_days=len(data.bars),
+            trading_days=sum(1 for bar in data.bars if bar.close is not None),
         ),
-        corporate_actions=[
-            CorporateActionOut(
-                date=bar.date,
-                ex_rt=bar.ex_rt,
-                label=convert.EX_RT_LABELS.get(bar.ex_rt or 0, "権利落ち"),
-                adj_factor=bar.adj_factor if bar.adj_factor is not None else 1.0,
-            )
-            for bar in bars
-            if bar.ex_rt is not None or (bar.adj_factor not in (None, 1.0))
-        ],
-        halted_days=sum(1 for bar in bars if bar.close is None),
-        data_info=convert.data_info_out(service.get_data_info(sid)),
+        corporate_actions=convert.corporate_actions_out(data.bars),
+        halted_days=sum(1 for bar in data.bars if bar.close is None),
+        data_info=convert.data_info_out(data.info),
+    )
+
+
+def market_out(sid: SymbolId) -> MarketOut:
+    market = sid.market_config
+    return MarketOut(
+        code=market.code,
+        name=market.name,
+        currency=market.currency,
+        lot_size=market.lot_size,
+        trading_days_per_year=market.trading_days_per_year,
     )
 
 
@@ -155,22 +152,24 @@ def run_backtest_endpoint(body: BacktestRequest, service: Service) -> BacktestOu
         )
     sid = SymbolId.parse(body.symbol_id)
     market = sid.market_config
-    params = validate_params(body.params, market.lot_size)
+    params = validate_params(body.params, market)
     run = get_engine(body.engine)  # 使えないエンジンなら EngineUnavailableError
 
     source = service.source_for(sid)
-    all_bars = service.get_daily_bars(sid)
-    available = service.get_available_range(sid)
-    period = validate_period(body.start_date, body.end_date, available, all_bars)
+    service.require_listed(sid)
+    data = service.load(sid)  # 日足・範囲・出どころを1回の読み込みから作る
+    period = validate_period(body.start_date, body.end_date, data.available, data.bars)
 
     started = time.perf_counter()
-    result = run(convert.to_engine_bars(all_bars), period.start, period.end, params)
+    result = run(convert.to_engine_bars(data.bars), period.start, period.end, params)
     elapsed_ms = (time.perf_counter() - started) * 1000
 
-    data_info = service.get_data_info(sid)
+    first_day, last_day = result.daily[0].date, result.daily[-1].date
     engine_info = next(e for e in list_engines() if e.id == body.engine)
     return BacktestOut(
-        symbol=convert.symbol_out(service.find_symbol(sid), source.source_id),
+        symbol=convert.symbol_out(
+            service.find_symbol(sid), source.source_id, service.describe(sid)
+        ),
         strategy_id=strategy.id,
         engine=EngineOut(**vars(engine_info)),
         period=PeriodOut(
@@ -190,17 +189,21 @@ def run_backtest_endpoint(body: BacktestRequest, service: Service) -> BacktestOu
             slippage_rate=params.slippage_rate,
             initial_cash=params.initial_cash,
             lot_size=params.lot_size,
+            trading_days_per_year=params.trading_days_per_year,
         ),
         metrics=convert.metrics_out(result),
         warmup=convert.warmup_out(result.warmup),
         insufficient_cash_count=result.insufficient_cash_count,
-        notes=convert.notes_out(result, sid.market, data_info.license_note),
+        notes=convert.notes_out(result, sid.market, data.info),
         daily=convert.daily_out(result),
         signals=convert.signals_out(result),
         fills=convert.fills_out(result),
         skipped_orders=convert.skipped_out(result),
         events=convert.events_out(result),
         trades=convert.trades_out(result),
-        data_info=convert.data_info_out(data_info),
+        corporate_actions=convert.corporate_actions_out(
+            [bar for bar in data.bars if first_day <= bar.date <= last_day]
+        ),
+        data_info=convert.data_info_out(data.info),
         elapsed_ms=elapsed_ms,
     )

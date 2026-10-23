@@ -32,7 +32,12 @@ class DataInfoOut(_Model):
     source_id: str
     source_label: str
     license_note: str
-    fetched_at: dt.datetime | None
+    fetched_at: dt.datetime | None = Field(
+        description="データを取得した日時(UTC。架空データは null)"
+    )
+    warning: str | None = Field(
+        None, description="最新のデータを取得できず、保存済みの古いデータを使ったときの説明"
+    )
 
 
 # --- メタ情報 ------------------------------------------------------------------------
@@ -83,6 +88,7 @@ class MarketOut(_Model):
     name: str
     currency: str
     lot_size: int
+    trading_days_per_year: int = Field(description="年率換算に使う年間の営業日数")
 
 
 class DateRangeOut(_Model):
@@ -97,6 +103,9 @@ class CorporateActionOut(_Model):
     ex_rt: int | None
     label: str
     adj_factor: float
+    changes_shares: bool = Field(
+        description="持ち株数が変わる日か(分割・併合で、調整係数が1でない日。docs/mvp.md 2.8)"
+    )
 
 
 class SymbolDetailOut(_Model):
@@ -145,17 +154,19 @@ class MaCrossParamsIn(_Model):
     # Infinity・NaN は「数値で入力してください」にする
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
-    short_window: float = Field(5, description="短期移動平均の日数(1以上の整数)")
-    long_window: float = Field(25, description="長期移動平均の日数(短期より大きい整数)")
+    short_window: float = Field(5, description="短期移動平均の日数(1以上1000以下の整数)")
+    long_window: float = Field(25, description="長期移動平均の日数(短期より大きく、1000以下の整数)")
     fee_rate_pct: float = Field(0.1, description="手数料率(%)。0以上10未満")
     slippage_rate_pct: float = Field(0.05, description="スリッページ率(%)。0以上10未満")
     initial_cash: float = Field(1_000_000, description="初期資金(円)。1円以上10億円以下")
 
 
 class BacktestRequest(_Model):
-    symbol_id: str = Field(examples=["DEMO:1003"])
-    strategy_id: str = "ma_cross"
-    engine: str = Field("python", description="python(リファレンス)または cpp(ビルド後)")
+    symbol_id: str = Field(examples=["DEMO:1003"], max_length=32)
+    strategy_id: str = Field("ma_cross", max_length=64)
+    engine: str = Field(
+        "python", description="python(リファレンス)または cpp(ビルド後)", max_length=32
+    )
     start_date: dt.date | None = Field(None, description="省略するとデータの最初の日")
     end_date: dt.date | None = Field(None, description="省略するとデータの最後の日")
     params: MaCrossParamsIn = MaCrossParamsIn()
@@ -182,6 +193,7 @@ class ParamsOut(_Model):
     slippage_rate: float = Field(description="エンジンに渡した割合")
     initial_cash: float
     lot_size: int
+    trading_days_per_year: int = Field(description="年率換算に使った年間の営業日数")
 
 
 class MetricsOut(_Model):
@@ -215,6 +227,7 @@ class NoteOut(_Model):
         "insufficient_cash",
         "execution_assumption",
         "data_license",
+        "stale_data",
     ]
     message: str
 
@@ -301,5 +314,8 @@ class BacktestOut(_Model):
     skipped_orders: list[SkippedOrderOut]
     events: list[EventOut]
     trades: list[TradeOut]
+    corporate_actions: list[CorporateActionOut] = Field(
+        description="期間内の権利落ち(株を持っていない日も含む)。チャートの線を切る位置などに使う"
+    )
     data_info: DataInfoOut
     elapsed_ms: float = Field(description="計算にかかった時間(ミリ秒)")

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime as dt
 import importlib
+import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -18,7 +19,6 @@ from typing import Any
 from engine.reference import BacktestResult, Bar, MaCrossParams, run_backtest
 from engine.reference.metrics import compute_metrics
 from engine.reference.types import (
-    TRADING_DAYS_PER_YEAR,
     CorporateActionEvent,
     DailyRecord,
     Fill,
@@ -31,6 +31,8 @@ from engine.reference.types import (
 )
 
 CPP_MODULE_NAME = "backtest_cpp"
+
+logger = logging.getLogger("backend.engines")
 
 
 class EngineUnavailableError(RuntimeError):
@@ -48,23 +50,36 @@ class EngineInfo:
 RunFunction = Callable[[Sequence[Bar], dt.date, dt.date, MaCrossParams], BacktestResult]
 
 
-def _load_cpp_module() -> Any | None:
+NOT_BUILT = "まだビルドされていません(docs/cpp/README.md)"
+LOAD_FAILED = (
+    "ビルドされていますが、読み込めませんでした(Python のバージョン違い・足りないライブラリなど)。"
+    "API サーバーのターミナルに出ているエラーを確認してください"
+)
+
+
+def _load_cpp_module() -> tuple[Any | None, str]:
+    """C++ 版のモジュールと、使えないときの理由。
+
+    - まだビルドされていない(モジュールそのものが見つからない):ふつうの状態
+    - ビルドはされているが読み込めない(依存ライブラリがない・Python のバージョン違いなど):詳しい中身はログに出す
+    """
     try:
-        return importlib.import_module(CPP_MODULE_NAME)
+        return importlib.import_module(CPP_MODULE_NAME), "ビルド済み"
+    except ModuleNotFoundError as error:
+        if error.name == CPP_MODULE_NAME:
+            return None, NOT_BUILT
+        logger.exception("C++ 版のモジュール %s を読み込めませんでした", CPP_MODULE_NAME)
+        return None, LOAD_FAILED
     except ImportError:
-        return None
+        logger.exception("C++ 版のモジュール %s を読み込めませんでした", CPP_MODULE_NAME)
+        return None, LOAD_FAILED
 
 
 def list_engines() -> list[EngineInfo]:
-    cpp = _load_cpp_module()
+    cpp, note = _load_cpp_module()
     return [
         EngineInfo("python", "Python リファレンス実装", True, "仕様どおりに計算する正解の実装"),
-        EngineInfo(
-            "cpp",
-            "C++ CPU 版",
-            cpp is not None,
-            "ビルド済み" if cpp is not None else "まだビルドされていません(docs/cpp/README.md)",
-        ),
+        EngineInfo("cpp", "C++ CPU 版", cpp is not None, note),
     ]
 
 
@@ -72,11 +87,9 @@ def get_engine(engine_id: str) -> RunFunction:
     if engine_id == "python":
         return run_backtest
     if engine_id == "cpp":
-        module = _load_cpp_module()
+        module, note = _load_cpp_module()
         if module is None:
-            raise EngineUnavailableError(
-                "C++ 版のエンジンはまだビルドされていません。docs/cpp/README.md の手順で作ってください"
-            )
+            raise EngineUnavailableError(f"C++ 版のエンジンは使えません。{note}")
         return lambda bars, start, end, params: run_cpp(module, bars, start, end, params)
     raise EngineUnavailableError(f"知らないエンジンです: {engine_id}")
 
@@ -115,6 +128,7 @@ def run_cpp(
             "slippage_rate": params.slippage_rate,
             "initial_cash": params.initial_cash,
             "lot_size": params.lot_size,
+            "trading_days_per_year": params.trading_days_per_year,
         },
     )
     return convert_cpp_result(raw, start, end, params)
@@ -205,7 +219,9 @@ def convert_cpp_result(
     # 指標は C++ 版が返した値を使う(一致テストは docs/cpp/contract.md の基準で別に行う)
     m = raw.get("metrics")
     metrics = (
-        compute_metrics([d.equity for d in daily], params.initial_cash, trades)
+        compute_metrics(
+            [d.equity for d in daily], params.initial_cash, trades, params.trading_days_per_year
+        )
         if m is None
         else _metrics_from_raw(m)
     )
@@ -223,7 +239,7 @@ def convert_cpp_result(
         warmup=warmup,
         notes=Notes(
             open_position_at_end=daily[-1].shares > 0,
-            annualized_is_reference=metrics.return_count < TRADING_DAYS_PER_YEAR,
+            annualized_is_reference=metrics.return_count < params.trading_days_per_year,
         ),
     )
 

@@ -1,6 +1,8 @@
 """FastAPI のエントリーポイント。
 
 起動:make dev-api → http://localhost:8000/docs で API の説明とお試し実行ができる。
+uvicorn には create_app を「アプリを作る関数」として渡す(--factory)。import しただけでは .env を読まず、
+アプリも作らないので、テストが本物の設定(APIキーなど)を読み込んでしまうことがない。
 """
 
 from __future__ import annotations
@@ -28,7 +30,8 @@ def create_app(
         version="0.1.0",
     )
     app.state.settings = settings
-    app.state.market_data = service or build_service(settings)
+    # interactive=True:画面からのリクエストで、J-Quants の回数の上限を長く待たない
+    app.state.market_data = service or build_service(settings, interactive=True)
     # 画面は Next.js の rewrites で同じオリジンとして呼ぶが、直接呼ぶときのために許可しておく
     app.add_middleware(
         CORSMiddleware,
@@ -39,6 +42,3 @@ def create_app(
     install_error_handlers(app)
     app.include_router(router)
     return app
-
-
-app = create_app()

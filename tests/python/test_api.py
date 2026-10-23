@@ -3,19 +3,30 @@
 from __future__ import annotations
 
 import datetime as dt
+import math
 import sys
 import types
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from backend.api.convert import to_engine_bars
 from backend.main import create_app
-from backend.marketdata.models import SymbolId
+from backend.marketdata.jquants import JQuantsClient, JQuantsDataSource
+from backend.marketdata.models import SymbolId, SymbolInfo
+from backend.marketdata.service import MarketDataService
+from backend.marketdata.store import ParquetStore
 from backend.marketdata.synthetic import DemoDataSource
 from backend.settings import Settings
 from engine.reference import Bar, MaCrossParams, run_backtest
 from engine.reference.contract import to_contract_dict
+
+
+@pytest.fixture(autouse=True)
+def cpp_not_built(monkeypatch) -> None:
+    """C++ 版がビルドされていても、テストの結果が変わらないようにする(使うテストは偽物を入れ直す)。"""
+    monkeypatch.setitem(sys.modules, "backtest_cpp", None)
 
 
 @pytest.fixture
@@ -58,13 +69,20 @@ def test_symbol_detail_shows_range_actions_and_halts(client: TestClient) -> None
         "name": "架空市場(デモ用)",
         "currency": "JPY",
         "lot_size": 100,
+        "trading_days_per_year": 245,
     }
     assert (
         body["range"]["first_date"] == "2022-01-04" and body["range"]["last_date"] == "2026-07-31"
     )
     assert body["halted_days"] == 7
     assert body["corporate_actions"] == [
-        {"date": "2025-03-12", "ex_rt": 1, "label": "株式分割", "adj_factor": 0.5}
+        {
+            "date": "2025-03-12",
+            "ex_rt": 1,
+            "label": "株式分割",
+            "adj_factor": 0.5,
+            "changes_shares": True,
+        }
     ]
     assert body["data_info"]["source_id"] == "demo"
 
@@ -154,6 +172,8 @@ def test_insufficient_cash_is_reported(client: TestClient) -> None:
         ),
         ({"short_window": 2.5}, "short_window", "日数は1以上の整数で入力してください"),
         ({"long_window": 0}, "long_window", "日数は1以上の整数で入力してください"),
+        ({"long_window": 1001}, "long_window", "日数は1000以下で入力してください"),
+        ({"short_window": 1e21}, "short_window", "日数は1000以下で入力してください"),
         (
             {"fee_rate_pct": -0.1},
             "fee_rate_pct",
@@ -256,3 +276,168 @@ def test_cpp_engine_adapter_with_fake_module(client: TestClient, monkeypatch) ->
     assert cpp["engine"]["id"] == "cpp"
     for key in ("metrics", "daily", "signals", "fills", "events", "trades", "warmup"):
         assert cpp[key] == python[key], key
+
+
+# --- 監査の指摘を受けて足したテスト ----------------------------------------------------
+
+
+def test_result_has_corporate_actions_and_market_settings(client: TestClient) -> None:
+    split = client.post("/api/backtests", json={"symbol_id": "DEMO:1003"}).json()
+    assert split["params"]["trading_days_per_year"] == 245
+    assert [(a["date"], a["changes_shares"]) for a in split["corporate_actions"]] == [
+        ("2025-04-01", True)
+    ]
+    rights = client.post("/api/backtests", json={"symbol_id": "DEMO:1007"}).json()
+    assert [(a["date"], a["ex_rt"], a["changes_shares"]) for a in rights["corporate_actions"]] == [
+        ("2025-06-02", 3, False)  # 株主割当増資は持ち株数を変えない
+    ]
+    later = client.post(
+        "/api/backtests", json={"symbol_id": "DEMO:1003", "end_date": "2025-03-31"}
+    ).json()
+    assert later["corporate_actions"] == []  # 期間の外の権利落ちは入れない
+
+
+def test_insufficient_cash_note_uses_lot_size(client: TestClient) -> None:
+    body = client.post("/api/backtests", json={"symbol_id": "DEMO:1009"}).json()
+    note = next(n for n in body["notes"] if n["kind"] == "insufficient_cash")
+    assert "売買単位の100株を買えなかった" in note["message"]
+
+
+def test_unknown_paths_and_methods_are_japanese(client: TestClient) -> None:
+    missing = client.get("/api/does-not-exist")
+    assert (
+        missing.status_code == 404 and missing.json()["detail"] == "そのアドレスの API はありません"
+    )
+    method = client.delete("/api/backtests")
+    assert method.status_code == 405 and "メソッド" in method.json()["detail"]
+
+
+def test_too_long_inputs_are_rejected_without_echoing(client: TestClient) -> None:
+    response = client.post("/api/backtests", json={"symbol_id": "DEMO:" + "1" * 5000})
+    assert response.status_code == 422
+    assert {"field": "symbol_id", "message": "文字数が多すぎます"} in response.json()["errors"]
+    detail = client.get("/api/symbols/" + "X" * 500)
+    assert detail.status_code == 422 and len(detail.json()["detail"]) < 100
+
+
+@pytest.mark.parametrize("limit", [0, 101])
+def test_search_limit_is_checked(client: TestClient, limit: int) -> None:
+    response = client.get("/api/symbols", params={"q": "", "limit": limit})
+    assert response.status_code == 422
+    assert response.json()["errors"][0] == {
+        "field": "limit",
+        "message": "値の範囲が正しくありません",
+    }
+
+
+class ExplodingService(MarketDataService):
+    def load(self, symbol_id):  # type: ignore[override]
+        raise RuntimeError("内部の情報 /secret/path")
+
+
+def test_unexpected_errors_are_japanese_json(tmp_path) -> None:
+    app = create_app(Settings(data_dir=tmp_path), service=ExplodingService([DemoDataSource()]))
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.post("/api/backtests", json={"symbol_id": "DEMO:1001"})
+    assert response.status_code == 500
+    body = response.json()  # JSON で返す(画面が「接続できない」と区別できるように)
+    assert "想定していないエラー" in body["detail"] and body["errors"] == []
+    assert "secret" not in response.text  # 中身はログにだけ出す
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ImportError("undefined symbol: _ZN8backtest"),  # ビルドはしたが読み込めない
+        ModuleNotFoundError("No module named 'libfoo'", name="libfoo"),  # 依存するものがない
+    ],
+)
+def test_cpp_module_that_fails_to_load_is_explained(
+    client: TestClient, monkeypatch, error: ImportError
+) -> None:
+    class BrokenFinder:
+        def find_spec(self, name, path=None, target=None):
+            if name == "backtest_cpp":
+                raise error
+            return None
+
+    monkeypatch.delitem(sys.modules, "backtest_cpp")
+    monkeypatch.setattr(sys, "meta_path", [BrokenFinder(), *sys.meta_path])
+    engines = {e["id"]: e for e in client.get("/api/meta").json()["engines"]}
+    assert engines["cpp"]["available"] is False
+    assert "読み込めませんでした" in engines["cpp"]["note"]
+
+
+# --- J-Quants(東証)の道筋。本物の API には接続せず、httpx.MockTransport で応答を作る ---
+
+
+def jquants_items(days: int = 60) -> list[dict]:
+    items, day, k = [], dt.date(2024, 1, 4), 0
+    while len(items) < days:
+        if day.weekday() < 5:
+            price = 1000.0 + 50 * math.sin(k / 6)
+            items.append(
+                {
+                    "Date": day.isoformat(),
+                    "Code": "72030",
+                    "O": price,
+                    "H": price,
+                    "L": price,
+                    "C": price,
+                    "Vo": 1000.0,
+                    "Va": 1.0e6,
+                    "AdjFactor": 1.0,
+                    "ExRT": None,
+                    "UL": "0",
+                    "LL": "0",
+                }
+            )
+            k += 1
+        day += dt.timedelta(days=1)
+    return items
+
+
+def jquants_client_app(tmp_path, handler, *, symbols: list[str] | None = None) -> TestClient:
+    store = ParquetStore(tmp_path / "jquants")
+    if symbols is not None:
+        store.write_symbols(
+            [SymbolInfo(SymbolId.parse(s), f"銘柄{s}") for s in symbols],
+            dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
+        )
+    client = JQuantsClient("key", transport=httpx.MockTransport(handler), max_wait=15)
+    service = MarketDataService([DemoDataSource(), JQuantsDataSource(client, store)])
+    return TestClient(create_app(Settings(data_dir=tmp_path), service=service))
+
+
+def test_tse_symbol_runs_through_jquants(tmp_path) -> None:
+    client = jquants_client_app(
+        tmp_path, lambda request: httpx.Response(200, json={"data": jquants_items()})
+    )
+    meta = client.get("/api/meta").json()
+    jq = next(s for s in meta["data_sources"] if s["id"] == "jquants")
+    assert jq["can_fetch"] and "私的使用" in jq["license_note"]
+    detail = client.get("/api/symbols/TSE:7203").json()
+    assert detail["market"]["code"] == "TSE" and detail["range"]["business_days"] == 60
+    body = client.post(
+        "/api/backtests", json={"symbol_id": "TSE:7203", "params": {"long_window": 10}}
+    ).json()
+    kinds = [n["kind"] for n in body["notes"]]
+    assert "survivorship" in kinds and "data_license" in kinds and "demo_data" not in kinds
+    assert body["data_info"]["source_id"] == "jquants" and body["data_info"]["fetched_at"]
+
+
+def test_rate_limit_from_jquants_is_503_in_japanese(tmp_path) -> None:
+    client = jquants_client_app(tmp_path, lambda request: httpx.Response(429))
+    response = client.post("/api/backtests", json={"symbol_id": "TSE:7203"})
+    assert response.status_code == 503
+    assert "リクエスト数の上限" in response.json()["detail"]
+
+
+def test_delisted_symbol_is_refused_when_listing_is_known(tmp_path) -> None:
+    client = jquants_client_app(
+        tmp_path,
+        lambda request: httpx.Response(200, json={"data": jquants_items()}),
+        symbols=["TSE:6758"],
+    )
+    response = client.post("/api/backtests", json={"symbol_id": "TSE:7203"})
+    assert response.status_code == 404 and "上場廃止" in response.json()["detail"]
