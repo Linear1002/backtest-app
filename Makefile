@@ -2,7 +2,7 @@
 
 BUILD_DIR := build
 
-.PHONY: setup test lint dev-api dev-web data-symbols data-fetch data-info data-check
+.PHONY: setup test lint dev-api dev-web data-symbols data-fetch data-info data-check golden test-cpp cpp-case
 
 # 依存ライブラリのインストールと C++ のビルド設定(最初に1回、依存が変わったときに実行)
 # --locked:uv.lock を勝手に書き換えない(CI と同じ)。依存を変えるときは uv add / uv lock を使う
@@ -52,3 +52,24 @@ data-info:
 # docs/mvp.md 3.1 の「要確認」(調整係数の桁数など)を実データで調べる(10分ほどかかる)
 data-check:
 	uv run python -m backend.marketdata check-assumptions
+
+# --- C++ 版エンジンの答え合わせ(docs/cpp/README.md) ---
+
+# 段階1に取り組んでいる間は engine/cpp/STAGE に 1 と書いておく(CI も同じファイルを読む)
+STAGE ?= $(shell cat engine/cpp/STAGE 2>/dev/null || echo 2)
+
+# 正解データ(tests/golden)をリファレンス実装で作り直す
+golden:
+	uv run python scripts/make_golden.py
+
+# C++ 版をビルドして、すべてのゴールデンケースと比べる。段階1だけなら make test-cpp STAGE=1
+test-cpp: $(BUILD_DIR)/CMakeCache.txt
+	cmake --build $(BUILD_DIR)
+	BACKTEST_CPP_STAGE=$(STAGE) uv run pytest tests/python/test_golden.py -k cpp -v
+
+# 1つのケースだけ C++ 版で動かして比べる。例: make cpp-case CASE=h01_round_trip
+cpp-case: $(BUILD_DIR)/CMakeCache.txt
+	cmake --build $(BUILD_DIR)
+	rm -rf $(BUILD_DIR)/case-out
+	-$(BUILD_DIR)/engine/cpp/backtest_cli tests/golden/cases/$(CASE)/input $(BUILD_DIR)/case-out
+	uv run python -m engine.reference.compare tests/golden/cases/$(CASE)/expected $(BUILD_DIR)/case-out

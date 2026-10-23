@@ -36,6 +36,20 @@ jobs:
       - run: cmake -S . -B build -G Ninja
       - run: cmake --build build
       - run: ctest --test-dir build --output-on-failure
+      # C++ 版エンジン(開発者が書く)ができたら、正解データ(tests/golden)と答え合わせする。
+      # 段階1に取り組んでいる間は engine/cpp/STAGE に 1 と書いておく(docs/cpp/README.md)
+      - name: 答え合わせの準備(uv)
+        if: hashFiles('engine/cpp/CMakeLists.txt') != ''
+        uses: astral-sh/setup-uv@v10.3.2
+        with:
+          enable-cache: true
+      - name: C++ 版と正解データの答え合わせ
+        if: hashFiles('engine/cpp/CMakeLists.txt') != ''
+        run: |
+          uv sync --locked
+          STAGE=$(cat engine/cpp/STAGE 2>/dev/null || echo 2)
+          echo "段階${STAGE}までのケースで答え合わせします"
+          BACKTEST_CPP_STAGE="$STAGE" uv run pytest tests/python/test_golden.py -k cpp -v
 
   frontend:
     name: frontend(lint・ビルド)

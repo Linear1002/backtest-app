@@ -1,0 +1,5 @@
+first_date=2024-07-18
+last_date=2024-07-31
+valid_days=10
+sufficient=true
+signals_unavailable_until=

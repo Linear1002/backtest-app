@@ -1,0 +1,4 @@
+date,ex_rt,adj_factor,p,q,shares_before,shares_after,fraction_shares,fraction_cash,closed_position
+2025-01-10,1,0.666667,3,2,100,150,0.0,0.0,false
+2025-01-13,1,0.666667,3,2,150,225,0.0,0.0,false
+2025-01-14,2,10.0,1,10,225,22,0.5,227.5,false

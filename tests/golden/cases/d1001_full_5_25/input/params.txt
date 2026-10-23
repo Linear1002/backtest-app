@@ -1,0 +1,8 @@
+start=2022-01-04
+end=2026-07-31
+short_window=5
+long_window=25
+fee_rate=0.001
+slippage_rate=0.0005
+initial_cash=1000000.0
+lot_size=100

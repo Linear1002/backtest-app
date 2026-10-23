@@ -41,4 +41,9 @@ FetchContent_MakeAvailable(googletest)
 enable_testing()
 include(GoogleTest)
 
+# C++ 版エンジン(開発者が書く。docs/cpp/README.md)。engine/cpp/CMakeLists.txt ができたら自動で組み込む
+if(EXISTS "${CMAKE_SOURCE_DIR}/engine/cpp/CMakeLists.txt")
+  add_subdirectory(engine/cpp)
+endif()
+
 add_subdirectory(tests/cpp)
