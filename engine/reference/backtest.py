@@ -38,6 +38,9 @@ MAX_INITIAL_CASH = 1_000_000_000  # 10億円(4.3)
 
 SPLIT_OR_MERGER = (1, 2)  # ExRT: 1 分割、2 併合
 KNOWN_EX_RT = (1, 2, 3)  # 3 は株主割当増資
+MIN_SPLIT_FACTOR = 0.001  # 分割・併合の比率は1000倍まで(2.8)
+MAX_SPLIT_FACTOR = 1000.0
+INT64_MAX = 2**63 - 1
 
 
 # --- 入力チェック --------------------------------------------------------------------
@@ -51,11 +54,15 @@ def validate_params(params: MaCrossParams) -> None:
     if params.short_window >= params.long_window:
         raise EngineInputError("短期の日数は長期の日数より小さくしてください")
     for rate in (params.fee_rate, params.slippage_rate):
-        if not math.isfinite(rate) or rate < 0:
+        if not math.isfinite(rate):
+            raise EngineInputError("手数料率とスリッページ率は数値で入力してください")
+        if rate < 0:
             raise EngineInputError("手数料率とスリッページ率は0以上で入力してください")
         if rate >= MAX_RATE:
             raise EngineInputError("手数料率とスリッページ率は10%未満で入力してください")
-    if not math.isfinite(params.initial_cash) or params.initial_cash <= 0:
+    if not math.isfinite(params.initial_cash):
+        raise EngineInputError("初期資金は数値で入力してください")
+    if params.initial_cash < 1:
         raise EngineInputError("初期資金は1円以上で入力してください")
     if params.initial_cash > MAX_INITIAL_CASH:
         raise EngineInputError("初期資金は10億円以下で入力してください")
@@ -63,24 +70,57 @@ def validate_params(params: MaCrossParams) -> None:
         raise EngineInputError("売買単位は1以上にしてください")
 
 
-def validate_bars(bars: Sequence[Bar]) -> None:
-    """データの異常をはじく(2.8 最後の項目、3.1)。持ち株がない日も同じようにチェックする。"""
+def validate_order(bars: Sequence[Bar]) -> None:
+    """日付が古い順に並んでいるか(入力全体をチェックする。読み込む範囲の切り出しがこれに頼るため)。"""
     for previous, current in zip(bars, bars[1:], strict=False):
         if current.date <= previous.date:
             raise EngineDataError(
                 f"日足の日付が古い順に並んでいません({previous.date} の次が {current.date})"
             )
+
+
+def _is_positive_finite(value: float) -> bool:
+    return math.isfinite(value) and value > 0
+
+
+def is_split_or_merger(bar: Bar) -> bool:
+    """持ち株数を変える日か(2.8)。ExRT が1か2で、調整係数が1でない日。"""
+    return bar.ex_rt in SPLIT_OR_MERGER and bar.adj_factor != 1.0
+
+
+def validate_records(bars: Sequence[Bar]) -> None:
+    """データの異常をはじく(docs/mvp.md 3.7)。読み込む範囲(ウォームアップ〜終了日)のレコードだけをチェックする。
+
+    持ち株があるかどうかに関係なく、同じデータなら同じ結果(エラーか計算か)になるようにする。
+    """
     for bar in bars:
+        if (bar.open is None) != (bar.close is None):
+            raise EngineDataError(f"{bar.date} は始値と終値の片方だけが Null です")
+        for name, price in (("始値", bar.open), ("終値", bar.close)):
+            if price is not None and not _is_positive_finite(price):
+                raise EngineDataError(f"{bar.date} の{name}が正しくありません: {price}")
         if bar.adj_factor is None:
             raise EngineDataError(f"{bar.date} の調整係数が Null です")
-        if not (bar.adj_factor > 0 and math.isfinite(bar.adj_factor)):
+        if not _is_positive_finite(bar.adj_factor):
             raise EngineDataError(f"{bar.date} の調整係数が正しくありません: {bar.adj_factor}")
         if bar.adj_factor != 1.0 and bar.ex_rt not in KNOWN_EX_RT:
             raise EngineDataError(
                 f"{bar.date} は調整係数が {bar.adj_factor} なのに、権利落ちの種類が {bar.ex_rt} です"
             )
-        if (bar.open is None) != (bar.close is None):
-            raise EngineDataError(f"{bar.date} は始値と終値の片方だけが Null です")
+        if is_split_or_merger(bar):
+            assert bar.adj_factor is not None
+            if not MIN_SPLIT_FACTOR <= bar.adj_factor <= MAX_SPLIT_FACTOR:
+                raise EngineDataError(
+                    f"{bar.date} の調整係数 {bar.adj_factor} は、扱える範囲(0.001〜1000)の外です"
+                )
+            recover_split_ratio(bar.adj_factor)  # 分数に戻せない係数はここでエラーにする
+
+
+def check_int64(value: int, what: str) -> int:
+    """C++ 版の int64_t に収まるか。収まらない値は、どちらの実装でもエラーにする。"""
+    if not -INT64_MAX - 1 <= value <= INT64_MAX:
+        raise EngineDataError(f"{what}が大きすぎて計算できません")
+    return value
 
 
 # --- 読み込む範囲(2.2 ウォームアップ期間) --------------------------------------------
@@ -112,7 +152,7 @@ def decide_buy_shares(
     """2.7 株数の決め方。(株数, 1株あたりの費用 unit_cost) を返す。株数0は資金不足。"""
     unit_cost = fill_price * (1 + fee_rate)
     lots = math.floor(cash / unit_cost / lot_size)
-    shares = lots * lot_size
+    shares = check_int64(lots * lot_size, "株数")
     if unit_cost * shares > cash:
         # 割り算の丸めで lots が1多くなる境目のケース
         lots -= 1
@@ -135,7 +175,7 @@ def valuation_price(bars: Sequence[Bar], index: int) -> float:
         )
     factor = 1.0
     for d in range(u + 1, index + 1):
-        if bars[d].ex_rt in SPLIT_OR_MERGER:
+        if is_split_or_merger(bars[d]):
             adj = bars[d].adj_factor
             assert adj is not None
             factor = factor * adj
@@ -210,8 +250,9 @@ def run_backtest(
     validate_params(params)
     if start > end:
         raise EngineInputError("開始日は終了日より前の日付にしてください")
-    validate_bars(bars)
+    validate_order(bars)
     loaded = select_load_range(bars, start, end, params.long_window)
+    validate_records(loaded)
 
     states = compute_cross_states(loaded, params.short_window, params.long_window)
     valid_indices = [i for i, bar in enumerate(loaded) if bar.is_valid]
@@ -238,11 +279,12 @@ def run_backtest(
         bar = loaded[t]
 
         # 手順1:分割・併合の処理(2.8)
-        if bar.ex_rt in SPLIT_OR_MERGER and shares > 0:
+        if is_split_or_merger(bar) and shares > 0:
             assert open_trade is not None and bar.adj_factor is not None
             p, q = recover_split_ratio(bar.adj_factor)
-            new_shares = shares * p // q  # 整数の掛け算と割り算
-            remainder = shares * p % q
+            scaled = check_int64(shares * p, "株数")  # C++ では掛け算の前に桁あふれを確かめる
+            new_shares = scaled // q  # 整数の掛け算と割り算
+            remainder = scaled % q
             fraction_shares = remainder / q
             fraction_cash = fraction_shares * valuation_price(loaded, t) if remainder else 0.0
             cash = cash + fraction_cash

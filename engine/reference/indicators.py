@@ -24,7 +24,7 @@ def cumulative_adjustments(bars: Sequence[Bar], t: int, oldest: int) -> list[flo
     cum[t - oldest] = 1.0
     for s in range(t - 1, oldest - 1, -1):
         factor = bars[s + 1].adj_factor
-        assert factor is not None  # 事前チェック済み(validate_bars)
+        assert factor is not None  # 事前チェック済み(validate_records)
         cum[s - oldest] = cum[s + 1 - oldest] * factor
     return cum
 

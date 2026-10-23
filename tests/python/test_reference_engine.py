@@ -4,6 +4,7 @@
 short=1・long=2 にすると D(t) = C(t) − C(t−1) × CumAdj(前日)(前日からの値動き)になり、手で追いやすい。
 """
 
+import dataclasses
 import datetime as dt
 import math
 import statistics
@@ -374,9 +375,11 @@ def test_period_validation() -> None:
 
 
 def test_period_may_start_and_end_on_holidays() -> None:
-    bars = make_bars([100, 101, 102, 103, 104])  # 2025-01-06(月)〜01-10(金)
-    result = run(bars, params(), start=dt.date(2025, 1, 4), end=dt.date(2025, 1, 12))
-    assert len(result.daily) == 5
+    # データは 2025-01-06(月)〜01-17(金)。開始日・終了日を、データの範囲の中の土日にする
+    bars = make_bars([100, 101, 102, 103, 104, 105, 106, 107, 108, 109])
+    result = run(bars, params(), start=dt.date(2025, 1, 11), end=dt.date(2025, 1, 19))
+    assert [r.date for r in result.daily] == [b.date for b in bars[5:]]
+    assert result.warmup.valid_days == 2  # 開始日より前の有効日を long_window 個使う
 
 
 @pytest.mark.parametrize(
@@ -397,3 +400,86 @@ def test_unsorted_dates_are_errors() -> None:
     bars = make_bars([100, 101, 102, 103])
     with pytest.raises(EngineDataError, match="古い順"):
         run([bars[1], bars[0], bars[2], bars[3]], params(), start=bars[0].date, end=bars[3].date)
+
+
+# --- 独立レビューで追加した境界ケース -----------------------------------------------
+
+
+def test_previous_d_uses_its_own_base_on_ex_date() -> None:
+    """権利落ち日に D(t') = 0 になる例。D(t') を t の基準で計算し直すと 8.9e-16 になり、上抜けを見落とす。"""
+    bars = make_bars([2.6, 1.6, 3.6, 1.215, 1.215], adj={3: 0.333333}, ex={3: 1})
+    states = compute_cross_states(bars, 2, 3)
+    assert states[2].d == 0.0  # t' 自身の基準で計算した D(t')
+    result = run(bars, params(short=2, long=3, cash=10_000))
+    assert signal_list(result) == [(bars[3].date, "buy", "order")]
+
+
+def test_zero_pnl_counts_as_loss_after_merger_to_zero_on_halted_day() -> None:
+    # 1株単位。1000:1 併合の権利落ち日が売買不成立の日と重なり、端数を現金に換えると損益がちょうど0になる
+    bars = make_bars([100, 99, 100, 100, None, 100_000, 100_000], adj={4: 1000.0}, ex={4: 2})
+    result = run(bars, params(cash=1_000, lot=1))
+    (trade,) = result.trades
+    assert trade.closed_by == "merger" and trade.pnl == 0.0
+    assert (result.metrics.trade_count, result.metrics.winning_trades, result.metrics.win_rate) == (
+        1,
+        0,
+        0.0,
+    )
+
+
+def test_records_outside_load_range_are_not_checked() -> None:
+    clean = make_bars([100 + (i % 7) for i in range(40)])
+    start, end = clean[20].date, clean[30].date
+    expected = run_backtest(clean, start, end, params(short=2, long=5))
+
+    after_end = list(clean)
+    after_end[39] = dataclasses.replace(after_end[39], adj_factor=None)
+    before_warmup = list(clean)
+    before_warmup[0] = dataclasses.replace(before_warmup[0], adj_factor=0.5, ex_rt=None)
+    for bars in (after_end, before_warmup):
+        assert run_backtest(bars, start, end, params(short=2, long=5)) == expected
+
+
+def test_unrecoverable_factor_is_an_error_even_without_position() -> None:
+    # 750.3:1 の併合は q ≤ 1000 の分数で表せない
+    bars = make_bars([100, 99, 100, 101, 102, 75_030, 75_100], adj={5: 750.3}, ex={5: 2})
+    for cash in (5_000.0, 100_000.0):  # 買えない資金でも、買える資金でも同じくエラー
+        with pytest.raises(EngineDataError, match="分数に戻せません"):
+            run(bars, params(cash=cash))
+    out_of_range = make_bars([100, 99, 100, 101, 102, 200, 201], adj={5: 2000.0}, ex={5: 2})
+    with pytest.raises(EngineDataError, match="扱える範囲"):
+        run(out_of_range, params(cash=5_000))
+
+
+@pytest.mark.parametrize(
+    ("closes", "opens"),
+    [
+        ([100, 99, 100, 101, 102], [100, 99, 100, 0, 102]),  # 始値 0
+        ([100, 99, 100, 101, 102], [100, 99, 100, -5, 102]),  # 負の始値
+        ([100, 99, 100, float("nan"), 102], [100, 99, 100, 101, 102]),  # 終値が NaN
+        ([100, 99, 100, float("inf"), 102], [100, 99, 100, 101, 102]),
+    ],
+)
+def test_invalid_prices_are_errors(closes, opens) -> None:
+    with pytest.raises(EngineDataError):
+        run(make_bars(closes, opens), params())
+
+
+def test_split_type_with_factor_one_is_not_an_event() -> None:
+    bars = make_bars([100, 99, 100, 101, 102, 103], ex={4: 1})  # ExRT はあるが調整係数は 1
+    result = run(bars, params(cash=20_000))
+    assert result.fills and result.events == ()
+
+
+def test_initial_cash_below_one_yen_is_rejected() -> None:
+    with pytest.raises(EngineInputError, match="1円以上"):
+        run(make_bars([100, 101, 102, 103]), params(cash=0.5))
+    with pytest.raises(EngineInputError, match="数値で入力"):
+        run(make_bars([100, 101, 102, 103]), params(fee=float("inf")))
+
+
+def test_share_count_overflow_is_an_error() -> None:
+    # 1株 1e-10 円・1株単位・10億円なら 1e19 株になり、C++ の int64_t に収まらない
+    bars = make_bars([1e-10, 0.99e-10, 1e-10, 1e-10, 1e-10])
+    with pytest.raises(EngineDataError, match="株数が大きすぎ"):
+        run(bars, params(cash=1_000_000_000, lot=1))
