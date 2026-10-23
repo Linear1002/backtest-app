@@ -76,7 +76,7 @@
 | コマンド | 内容 |
 |---|---|
 | `make setup` | 依存のインストール(uv sync / npm ci)と CMake の設定。最初と、依存が変わったときに実行 |
-| `make test` | pytest、C++ のビルド、ctest(GoogleTest) |
+| `make test` | pytest、C++ のビルド、ctest(GoogleTest)、画面の関数のテスト(`npm test`) |
 | `make lint` | ruff check / ruff format --check / ESLint |
 | `make dev-api` | API サーバー起動 → http://localhost:8000/api/health 、API ドキュメント http://localhost:8000/docs |
 | `make dev-web` | 画面の開発サーバー起動 → http://localhost:3000 |
