@@ -9,8 +9,13 @@ from __future__ import annotations
 import datetime as dt
 import unicodedata
 from collections.abc import Sequence
+from dataclasses import dataclass
 
-from backend.marketdata.jquants import JQuantsClient, JQuantsDataSource
+from backend.marketdata.jquants import (
+    INTERACTIVE_MAX_WAIT_SECONDS,
+    JQuantsClient,
+    JQuantsDataSource,
+)
 from backend.marketdata.models import DailyBar, DataInfo, DateRange, SymbolId, SymbolInfo
 from backend.marketdata.source import DataSource, SymbolNotFoundError
 from backend.marketdata.store import ParquetStore
@@ -22,6 +27,15 @@ def normalize_for_search(text: str) -> str:
     """検索用に文字をそろえる:全角英数→半角、大文字小文字の区別なし、ひらがな→カタカナ。"""
     normalized = unicodedata.normalize("NFKC", text).casefold().strip()
     return "".join(chr(ord(ch) + 0x60) if "ぁ" <= ch <= "ゖ" else ch for ch in normalized)
+
+
+@dataclass(frozen=True)
+class SymbolData:
+    """1銘柄分のデータ。日足・範囲・出どころを、同じ時点の読み込みからまとめて作る。"""
+
+    bars: list[DailyBar]
+    available: DateRange
+    info: DataInfo
 
 
 class MarketDataService:
@@ -84,6 +98,30 @@ class MarketDataService:
         # 銘柄一覧に無くても、日足が取れれば使えるようにする(J-Quants で一覧を未取得のとき)
         return SymbolInfo(symbol_id=symbol_id, name=symbol_id.code)
 
+    def describe(self, symbol_id: SymbolId) -> str | None:
+        """銘柄の補足説明(架空銘柄で確かめられる境界ケースなど)。"""
+        return self.source_for(symbol_id).describe(symbol_id)
+
+    def require_listed(self, symbol_id: SymbolId) -> None:
+        """MVP の対象(現在上場している銘柄)でなければ SymbolNotFoundError(docs/mvp.md 3.6)。"""
+        self.source_for(symbol_id).check_listed(symbol_id)
+
+    def load(self, symbol_id: SymbolId) -> SymbolData:
+        """日足を1回だけ読み、その範囲と出どころをまとめて返す。
+
+        日足と範囲を別々に読むと、そのあいだに取り直しが入ったとき、範囲のチェックと計算で
+        違う版のデータを使ってしまうことがあるため。
+        """
+        source = self.source_for(symbol_id)
+        bars = source.get_daily_bars(symbol_id)
+        if not bars:
+            raise SymbolNotFoundError(f"{symbol_id} の日足がありません")
+        return SymbolData(
+            bars=bars,
+            available=DateRange(bars[0].date, bars[-1].date),
+            info=source.get_data_info(symbol_id),
+        )
+
     def get_daily_bars(
         self, symbol_id: SymbolId, start: dt.date | None = None, end: dt.date | None = None
     ) -> list[DailyBar]:
@@ -96,13 +134,20 @@ class MarketDataService:
         return self.source_for(symbol_id).get_data_info(symbol_id)
 
 
-def build_jquants_source(settings: Settings) -> JQuantsDataSource | None:
-    """APIキーがあれば取得もできる J-Quants データソースを、なくても保存済みデータがあれば読み取り専用で作る。"""
+def build_jquants_source(
+    settings: Settings, *, interactive: bool = False
+) -> JQuantsDataSource | None:
+    """APIキーがあれば取得もできる J-Quants データソースを、なくても保存済みデータがあれば読み取り専用で作る。
+
+    interactive=True(API サーバー):リクエスト数の上限で長く待つ必要があるときは、待たずに目安を返す。
+    interactive=False(コマンド):必要なだけ待つ。
+    """
     store = ParquetStore(settings.data_dir / "jquants")
     client = (
         JQuantsClient(
             settings.jquants_api_key,
             requests_per_minute=settings.jquants_requests_per_minute,
+            max_wait=INTERACTIVE_MAX_WAIT_SECONDS if interactive else None,
         )
         if settings.jquants_api_key
         else None
@@ -114,9 +159,9 @@ def build_jquants_source(settings: Settings) -> JQuantsDataSource | None:
     )
 
 
-def build_service(settings: Settings) -> MarketDataService:
+def build_service(settings: Settings, *, interactive: bool = False) -> MarketDataService:
     sources: list[DataSource] = [DemoDataSource()]
-    jquants = build_jquants_source(settings)
+    jquants = build_jquants_source(settings, interactive=interactive)
     if jquants is not None:
         sources.append(jquants)
     return MarketDataService(sources)

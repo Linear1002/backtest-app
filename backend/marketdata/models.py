@@ -150,4 +150,7 @@ class DataInfo:
     source_id: str  # "demo" / "jquants"
     source_label: str  # 画面に出す名前
     license_note: str  # 利用条件の注意書き
-    fetched_at: dt.datetime | None  # データを取得した日時(架空データは None)
+    fetched_at: dt.datetime | None  # データを取得した日時(UTC。架空データは None)
+    warning: str | None = (
+        None  # 最新のデータを取得できず、保存済みの古いデータを使っているときの説明
+    )

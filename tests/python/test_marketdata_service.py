@@ -49,3 +49,24 @@ def test_routing_by_market(service: MarketDataService) -> None:
 def test_build_service_without_key_has_demo_only(tmp_path) -> None:
     service = build_service(Settings(data_dir=tmp_path))
     assert [source.source_id for source in service.sources] == ["demo"]
+
+
+def test_load_reads_bars_once_and_matches_range(service: MarketDataService) -> None:
+    data = service.load(SymbolId.parse("DEMO:1012"))
+    assert data.available.first == data.bars[0].date == dt.date(2025, 4, 1)
+    assert data.available.last == data.bars[-1].date
+    assert data.info.source_id == "demo" and data.info.warning is None
+
+
+def test_describe_and_listing_for_demo(service: MarketDataService) -> None:
+    symbol_id = SymbolId.parse("DEMO:1003")
+    assert "分割" in (service.describe(symbol_id) or "")
+    service.require_listed(symbol_id)  # 架空銘柄はすべて上場中として扱う
+    with pytest.raises(SymbolNotFoundError):
+        service.require_listed(SymbolId.parse("DEMO:9999"))
+
+
+def test_sources_describe_themselves(service: MarketDataService) -> None:
+    (demo,) = service.sources
+    assert demo.source_label == "架空データ(デモ用)"
+    assert "架空" in demo.license_note and demo.can_fetch

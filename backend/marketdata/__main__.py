@@ -41,27 +41,55 @@ def cmd_symbols(args: argparse.Namespace) -> int:
 
 
 def cmd_fetch(args: argparse.Namespace) -> int:
+    """指定した銘柄を順に取得する。途中の銘柄で失敗しても残りは続け、最後に失敗した銘柄をまとめて表示する。"""
     source = _jquants(load_settings())
+    failed: list[tuple[str, str]] = []
     for text in args.symbols:
-        symbol_id = SymbolId.parse(text)
+        try:
+            symbol_id = SymbolId.parse(text)
+        except InvalidSymbolIdError as error:
+            failed.append((text, str(error)))
+            continue
         if symbol_id.market != "TSE":
             print(f"{symbol_id}: 東証の銘柄だけ取得できます(DEMO は取得不要です)")
             continue
         print(f"{symbol_id}: 取得しています...")
-        bars = source.refresh_bars(symbol_id)
+        try:
+            bars = source.refresh_bars(symbol_id)
+        except MarketDataError as error:
+            print(f"{symbol_id}: 取得できませんでした:{error}", file=sys.stderr)
+            failed.append((str(symbol_id), str(error)))
+            continue
         halted = sum(1 for bar in bars if bar.close is None)
         print(
             f"{symbol_id}: {bars[0].date}〜{bars[-1].date} の {len(bars)} 営業日を保存しました"
             f"(売買不成立 {halted} 日)"
         )
+    if failed:
+        print(f"\n取得できなかった銘柄が {len(failed)} 件あります:", file=sys.stderr)
+        for name, reason in failed:
+            print(f"  - {name}:{reason}", file=sys.stderr)
+        return 1
     return 0
 
 
 def cmd_info(args: argparse.Namespace) -> int:
-    service = build_service(load_settings())
+    """保存済みのデータを表示する。J-Quants のデータは取り直さない(古くても、保存されている内容をそのまま見せる)。"""
+    settings = load_settings()
     symbol_id = SymbolId.parse(args.symbol)
-    bars = service.get_daily_bars(symbol_id)
-    info = service.get_data_info(symbol_id)
+    if symbol_id.market == "TSE":
+        source = build_jquants_source(settings)
+        bars = source.read_cached_bars(symbol_id) if source is not None else None
+        if not bars:
+            raise MarketDataError(
+                f"{symbol_id} のデータは保存されていません。make data-fetch SYMBOLS={symbol_id} で取得してください"
+            )
+        assert source is not None
+        info = source.get_data_info(symbol_id)
+    else:
+        service = build_service(settings)
+        bars = service.get_daily_bars(symbol_id)
+        info = service.get_data_info(symbol_id)
     print(f"銘柄: {symbol_id}  データソース: {info.source_label}")
     if info.fetched_at:
         print(f"取得日時: {info.fetched_at.isoformat()}")

@@ -424,7 +424,9 @@ class DemoDataSource:
 
     source_id = SOURCE_ID
     source_label = SOURCE_LABEL
+    license_note = LICENSE_NOTE
     markets = ("DEMO",)
+    can_fetch = True  # 計算で作るので、いつでも使える
 
     def list_symbols(self) -> list[SymbolInfo]:
         return [
@@ -440,6 +442,10 @@ class DemoDataSource:
     def describe(self, symbol_id: SymbolId) -> str:
         """その架空銘柄で確かめられる境界ケースの説明。"""
         return self._symbol(symbol_id).description
+
+    def check_listed(self, symbol_id: SymbolId) -> None:
+        """架空銘柄はすべて上場中として扱う(上場廃止の銘柄は作っていない)。"""
+        self._symbol(symbol_id)
 
     def get_daily_bars(
         self,

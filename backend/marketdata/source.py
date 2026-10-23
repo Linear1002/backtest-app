@@ -49,6 +49,29 @@ class DataSource(Protocol):
         """このデータソースが扱う市場(銘柄IDの前半。例: ("TSE",))。"""
         ...
 
+    @property
+    def source_label(self) -> str:
+        """画面に出す名前(例: "J-Quants API(東証)")。"""
+        ...
+
+    @property
+    def license_note(self) -> str:
+        """データの利用条件の注意書き(結果画面に出す)。"""
+        ...
+
+    @property
+    def can_fetch(self) -> bool:
+        """新しいデータを取得できるか(J-Quants は APIキーが必要)。"""
+        ...
+
+    def describe(self, symbol_id: SymbolId) -> str | None:
+        """銘柄の補足説明(架空銘柄で確かめられる境界ケースなど)。なければ None。"""
+        ...
+
+    def check_listed(self, symbol_id: SymbolId) -> None:
+        """MVP の対象(現在上場している銘柄)か確かめる。対象外なら SymbolNotFoundError(docs/mvp.md 3.6)。"""
+        ...
+
     def list_symbols(self) -> list[SymbolInfo]:
         """銘柄一覧を返す。"""
         ...

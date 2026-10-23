@@ -73,11 +73,14 @@ class ParquetStore:
         _write_atomically(table, self.bars_path(symbol_id))
 
     def read_bars(self, symbol_id: SymbolId) -> list[DailyBar] | None:
+        """保存済みの日足。ないとき、または保存の形式(schema_version・列)が今のものと違うときは None。
+
+        形式が違う古いファイルは「保存されていない」として扱い、次に使うときに取り直す。
+        """
         path = self.bars_path(symbol_id)
-        if not path.exists():
+        if not _is_current(path, _BAR_COLUMNS):
             return None
-        table = pq.read_table(path)
-        rows = table.to_pylist()
+        rows = pq.read_table(path).to_pylist()
         return [DailyBar(**{name: row[name] for name in _BAR_COLUMNS}) for row in rows]
 
     def bars_fetched_at(self, symbol_id: SymbolId) -> dt.datetime | None:
@@ -103,7 +106,7 @@ class ParquetStore:
         _write_atomically(table, self.symbols_path)
 
     def read_symbols(self) -> list[SymbolInfo] | None:
-        if not self.symbols_path.exists():
+        if not _is_current(self.symbols_path, [field.name for field in SYMBOL_SCHEMA]):
             return None
         rows = pq.read_table(self.symbols_path).to_pylist()
         return [
@@ -121,7 +124,7 @@ class ParquetStore:
         return _read_fetched_at(self.symbols_path)
 
     def cached_symbol_ids(self) -> list[SymbolId]:
-        """日足を保存済みの銘柄。"""
+        """日足を保存済みの銘柄(ファイル名から読む。形式が古いファイルも含む)。"""
         bars_dir = self.root / "bars"
         if not bars_dir.exists():
             return []
@@ -141,6 +144,15 @@ def _metadata(fetched_at: dt.datetime, **extra: str) -> dict[bytes, bytes]:
     metadata = {"fetched_at": fetched_at.isoformat(), "schema_version": SCHEMA_VERSION}
     metadata.update(extra)
     return {key.encode(): value.encode() for key, value in metadata.items()}
+
+
+def _is_current(path: Path, columns: list[str]) -> bool:
+    """ファイルがあり、今の形式(schema_version と列)で書かれているか。"""
+    if not path.exists():
+        return False
+    schema = pq.read_schema(path)
+    version = (schema.metadata or {}).get(b"schema_version", b"").decode()
+    return version == SCHEMA_VERSION and all(name in schema.names for name in columns)
 
 
 def _read_fetched_at(path: Path) -> dt.datetime | None:
