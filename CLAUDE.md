@@ -83,6 +83,7 @@
 | `make data-symbols` | J-Quants の銘柄一覧を取得して保存(APIキーが必要。docs/data.md) |
 | `make data-fetch SYMBOLS="TSE:7203"` | J-Quants の日足を取得して保存 |
 | `make data-info SYMBOL=DEMO:1003` | 保存済みデータの期間・権利落ちを表示 |
+| `make data-check` | docs/mvp.md 3.1 の「要確認」を実データで調べる(APIキーが必要。10分ほど) |
 
 - Python:バージョンは `.python-version`(3.14)。依存の追加は `uv add <pkg>`(開発用は `uv add --dev <pkg>`)、実行は `uv run <cmd>`
 - Node.js:バージョンは `.nvmrc`(24 LTS)。fnm で管理(`fnm use`)。依存の追加は `npm install <pkg> --prefix frontend`

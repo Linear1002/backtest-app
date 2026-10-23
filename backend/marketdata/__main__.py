@@ -5,6 +5,7 @@
     uv run python -m backend.marketdata fetch TSE:7203     # 日足を取得して保存(複数指定可)
     uv run python -m backend.marketdata info TSE:7203      # 保存済みデータの範囲と権利落ちの一覧
     uv run python -m backend.marketdata info DEMO:1003     # 架空データも見られる
+    uv run python -m backend.marketdata check-assumptions  # docs/mvp.md 3.1 の「要確認」を実データで調べる
 
 APIキーは .env の JQUANTS_API_KEY から読む。キーは画面に表示しない。
 """
@@ -14,7 +15,8 @@ from __future__ import annotations
 import argparse
 import sys
 
-from backend.marketdata.jquants import JQuantsDataSource
+from backend.marketdata.checks import scan_assumptions
+from backend.marketdata.jquants import JQuantsClient, JQuantsDataSource
 from backend.marketdata.models import InvalidSymbolIdError, SymbolId
 from backend.marketdata.service import build_jquants_source, build_service
 from backend.marketdata.source import MarketDataError
@@ -105,6 +107,23 @@ def cmd_info(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_check(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    if not settings.jquants_api_key:
+        raise MarketDataError("J-Quants の APIキーが設定されていません(.env の JQUANTS_API_KEY)")
+    client = JQuantsClient(
+        settings.jquants_api_key, requests_per_minute=settings.jquants_requests_per_minute
+    )
+    print(
+        f"{args.months} か月分を調べます。Free プランでは10分ほどかかります(途中で止めても問題ありません)"
+    )
+    report = scan_assumptions(client, months=args.months)
+    print()
+    for line in report.lines():
+        print(line)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m backend.marketdata", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -120,6 +139,12 @@ def build_parser() -> argparse.ArgumentParser:
     info = sub.add_parser("info", help="保存済みデータの範囲と権利落ちを表示する")
     info.add_argument("symbol", help="銘柄ID(例: TSE:7203、DEMO:1003)")
     info.set_defaults(func=cmd_info)
+
+    check = sub.add_parser(
+        "check-assumptions", help="docs/mvp.md 3.1 の「要確認」を実データで調べる"
+    )
+    check.add_argument("--months", type=int, default=24, help="調べる月数(既定: 24)")
+    check.set_defaults(func=cmd_check)
     return parser
 
 
