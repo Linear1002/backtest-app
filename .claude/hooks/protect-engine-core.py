@@ -4,6 +4,7 @@
 engine/cpp と engine/cuda(開発者が自分で書く計算コア)への Edit/Write をブロックする。
 終了コード 2 で終わると、ツール呼び出しがブロックされ、stderr が Claude に返される。
 """
+
 import json
 import os
 import sys

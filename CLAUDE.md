@@ -60,10 +60,28 @@
 - 推測で書かない。ライブラリのAPIは最新ドキュメントで確認する。
 - 株価データの取得元は利用規約を確認し、再配布禁止のデータをリポジトリやアプリ経由で配布しない。
 
+# 秘密情報
+- APIキー(JQUANTS_API_KEY など)は `.env` に置く。`.env` はコミットしない。Claude は `.env` を作らない・読まない。
+- APIキーを画面やログに出さない・コミットしない。例外メッセージやデバッグ出力にも含めない。
+- 必要な環境変数は `.env.example` に名前だけ書く(値は空)。
+
 # 言語
 - UIの文言・エラーメッセージ:日本語
 - 変数名・関数名:英語
 - コメント・コミットメッセージ:日本語でOK
 
 # コマンド
-(未定:環境構築後に記入)
+リポジトリ直下で実行する。前提ツール:build-essential、cmake 3.28 以上、ninja-build、uv、fnm。
+
+| コマンド | 内容 |
+|---|---|
+| `make setup` | 依存のインストール(uv sync / npm ci)と CMake の設定。最初と、依存が変わったときに実行 |
+| `make test` | pytest、C++ のビルド、ctest(GoogleTest) |
+| `make lint` | ruff check / ruff format --check / ESLint |
+| `make dev-api` | API サーバー起動 → http://localhost:8000/api/health 、API ドキュメント http://localhost:8000/docs |
+| `make dev-web` | 画面の開発サーバー起動 → http://localhost:3000 |
+
+- Python:バージョンは `.python-version`(3.14)。依存の追加は `uv add <pkg>`(開発用は `uv add --dev <pkg>`)、実行は `uv run <cmd>`
+- Node.js:バージョンは `.nvmrc`(24 LTS)。fnm で管理(`fnm use`)。依存の追加は `npm install <pkg> --prefix frontend`
+- C++:ビルドディレクトリは `build/`(Ninja)。既定は Release。デバッグ用は `cmake -S . -B build-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug`。CUDA を有効にするときは `cmake -S . -B build -G Ninja -DBACKTEST_ENABLE_CUDA=ON`
+- clangd は `build/compile_commands.json` を読む(`make setup` で生成される)
