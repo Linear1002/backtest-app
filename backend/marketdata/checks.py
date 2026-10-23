@@ -18,6 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from backend.marketdata.jquants import JQuantsClient
+from engine.reference.backtest import MAX_SPLIT_FACTOR, MIN_SPLIT_FACTOR
 from engine.reference.ratio import recover_split_ratio
 from engine.reference.types import EngineDataError
 
@@ -109,10 +110,20 @@ def _is_one(text: str) -> bool:
         return False
 
 
-def pick_dates(business_days: list[dt.date], months: int) -> list[dt.date]:
-    """各月の最後から2番目の営業日を、新しい月から months か月分。"""
+def pick_dates(
+    business_days: list[dt.date], months: int, *, today: dt.date | None = None
+) -> list[dt.date]:
+    """各月の最後から2番目の営業日を、新しい月から months か月分。
+
+    今日より後の日付(有料プランの取引カレンダーには未来の日も入る)は使わない。
+    """
+    if months < 1:
+        raise ValueError("調べる月数は1以上にしてください")
+    today = today or dt.date.today()
     by_month: dict[tuple[int, int], list[dt.date]] = {}
     for day in sorted(business_days):
+        if day > today:
+            continue
         by_month.setdefault((day.year, day.month), []).append(day)
     picked = [days[-2] for days in by_month.values() if len(days) >= 2]
     return sorted(picked)[-months:]
@@ -158,6 +169,9 @@ def inspect_record(report: AssumptionReport, item: dict) -> None:
         report.missing_ex_rt.append((code, date, factor))
     elif ex_rt in ("1", "2"):
         try:
-            recover_split_ratio(float(factor))
-        except EngineDataError:
+            value = float(factor)
+            if not MIN_SPLIT_FACTOR <= value <= MAX_SPLIT_FACTOR:  # 扱える比率は1000倍まで(2.8)
+                raise EngineDataError("範囲外")
+            recover_split_ratio(value)
+        except EngineDataError, ValueError:
             report.unrecoverable.append((code, date, factor))

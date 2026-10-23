@@ -12,8 +12,11 @@ from typing import Literal
 
 Side = Literal["buy", "sell"]
 
-# 年間の営業日数(東証。docs/mvp.md 5章)
+# 年間の営業日数の既定値(東証。docs/mvp.md 5章)。市場ごとに違うので、計算には MaCrossParams の値を使う
 TRADING_DAYS_PER_YEAR = 245
+
+# 移動平均の日数の上限(docs/mvp.md 4.3)。C++ 版の整数の範囲と計算量を守るため
+MAX_WINDOW = 1000
 
 
 class EngineInputError(ValueError):
@@ -55,7 +58,10 @@ class MaCrossParams:
     fee_rate: float
     slippage_rate: float
     initial_cash: float
-    lot_size: int = 100
+    lot_size: int = 100  # 売買単位(市場ごとの設定。東証は100株)
+    trading_days_per_year: int = (
+        TRADING_DAYS_PER_YEAR  # 年率換算に使う年間の営業日数(市場ごとの設定)
+    )
 
 
 # --- 出力 ---------------------------------------------------------------------------
@@ -170,7 +176,11 @@ class WarmupInfo:
 
 @dataclass(frozen=True)
 class Notes:
-    """結果画面の注記を出すかどうか(4章)。生存者バイアスの注記は常に出すのでここには無い。"""
+    """結果画面の注記を出すかどうか(4章)。
+
+    生存者バイアスの注記は、銘柄の市場で決まる(実データなら常に出し、架空データでは出さない)ので、
+    エンジンではなく API 側で付ける(docs/mvp.md 3.6)。
+    """
 
     open_position_at_end: bool  # 清算コスト控除前
     annualized_is_reference: bool  # N < 245 で年率は参考値

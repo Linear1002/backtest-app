@@ -375,7 +375,8 @@ def test_period_validation() -> None:
 
 
 def test_period_may_start_and_end_on_holidays() -> None:
-    # データは 2025-01-06(月)〜01-17(金)。開始日・終了日を、データの範囲の中の土日にする
+    # データは 2025-01-06(月)〜01-17(金)。開始日・終了日を土日にする(開始日はデータの範囲の中、終了日はデータの最後の日より後。
+    # エンジンはデータの範囲を知らないので、範囲のチェックは API が行う。docs/mvp.md 4.3)
     bars = make_bars([100, 101, 102, 103, 104, 105, 106, 107, 108, 109])
     result = run(bars, params(), start=dt.date(2025, 1, 11), end=dt.date(2025, 1, 19))
     assert [r.date for r in result.daily] == [b.date for b in bars[5:]]
@@ -483,3 +484,50 @@ def test_share_count_overflow_is_an_error() -> None:
     bars = make_bars([1e-10, 0.99e-10, 1e-10, 1e-10, 1e-10])
     with pytest.raises(EngineDataError, match="株数が大きすぎ"):
         run(bars, params(cash=1_000_000_000, lot=1))
+
+
+# --- 監査の指摘を受けて足したテスト ---
+
+
+def test_window_upper_bound() -> None:
+    """日数の上限は1000(docs/mvp.md 4.3)。C++ 版の整数の範囲と計算量を守るため。"""
+    bars = make_bars([100.0 + i for i in range(10)])
+    with pytest.raises(EngineInputError, match="日数は1000以下で入力してください"):
+        run_backtest(bars, bars[0].date, bars[-1].date, params(short=5, long=1001))
+    run_backtest(bars, bars[0].date, bars[-1].date, params(short=5, long=1000))
+
+
+def test_trading_days_per_year_is_a_market_setting() -> None:
+    """年率リターンとシャープレシオは、市場ごとの年間営業日数で換算する(東証は245)。"""
+    bars = make_bars([100.0, 101.0, 99.0, 102.0, 104.0, 103.0, 106.0, 105.0])
+    tse = run_backtest(bars, bars[0].date, bars[-1].date, params(short=1, long=2))
+    us = run_backtest(
+        bars,
+        bars[0].date,
+        bars[-1].date,
+        dataclasses.replace(params(short=1, long=2), trading_days_per_year=252),
+    )
+    assert tse.daily == us.daily and tse.trades == us.trades
+    n = tse.metrics.return_count
+    growth = tse.metrics.total_return + 1
+    assert tse.metrics.annualized_return == growth ** (245 / n) - 1
+    assert us.metrics.annualized_return == growth ** (252 / n) - 1
+    assert tse.metrics.sharpe_ratio is not None and us.metrics.sharpe_ratio is not None
+    assert us.metrics.sharpe_ratio == tse.metrics.sharpe_ratio / math.sqrt(245) * math.sqrt(252)
+    with pytest.raises(EngineInputError):
+        run_backtest(
+            bars,
+            bars[0].date,
+            bars[-1].date,
+            dataclasses.replace(params(), trading_days_per_year=0),
+        )
+
+
+def test_check_order_reports_parameters_before_data() -> None:
+    """パラメータとデータの両方に誤りがあるときは、パラメータの誤り(input)を先に報告する(3.7 のチェックの順番)。"""
+    bars = make_bars([100.0, 101.0, 102.0, 103.0])
+    broken = [dataclasses.replace(bars[1], adj_factor=None), *bars[2:]]
+    with pytest.raises(EngineInputError):
+        run_backtest(broken, bars[0].date, bars[-1].date, params(short=5, long=2))
+    with pytest.raises(EngineDataError):
+        run_backtest(broken, bars[1].date, bars[-1].date, params(short=1, long=2))

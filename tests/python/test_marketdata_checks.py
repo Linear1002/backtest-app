@@ -3,8 +3,9 @@
 import datetime as dt
 
 import httpx
+import pytest
 
-from backend.marketdata.checks import pick_dates, scan_assumptions
+from backend.marketdata.checks import AssumptionReport, inspect_record, pick_dates, scan_assumptions
 from backend.marketdata.jquants import JQuantsClient
 
 
@@ -66,3 +67,33 @@ def test_scan_reports_digits_halted_days_and_unknown_types() -> None:
     assert report.ex_rt_counts == {"1": 2, "9": 1}
     text = "\n".join(report.lines())
     assert "想定外の ExRT" in text and "0.333333" in text
+
+
+def test_pick_dates_needs_at_least_one_month_and_skips_future_days() -> None:
+    days = [dt.date(2025, 3, d) for d in (26, 27, 28, 31)] + [
+        dt.date(2025, 4, d) for d in (25, 28, 30)
+    ]
+    with pytest.raises(ValueError):
+        pick_dates(days, 0)
+    # 今日が 2025-03-31 なら、4月(未来)は使わない
+    assert pick_dates(days, 12, today=dt.date(2025, 3, 31)) == [dt.date(2025, 3, 28)]
+
+
+def test_out_of_range_split_factor_is_reported() -> None:
+    report = AssumptionReport(dates=[])
+    inspect_record(
+        report,
+        {
+            "Code": "11110",
+            "Date": "2025-03-28",
+            "AdjFactor": "0.0001",
+            "ExRT": "1",
+            "O": 1,
+            "H": 1,
+            "L": 1,
+            "C": 1,
+        },
+    )
+    assert report.unrecoverable == [
+        ("11110", "2025-03-28", "0.0001")
+    ]  # 1000倍を超える分割は扱えない

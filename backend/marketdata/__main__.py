@@ -124,6 +124,16 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def _positive_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"1以上の整数を指定してください: {text}") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"1以上の整数を指定してください: {text}")
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m backend.marketdata", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -143,7 +153,9 @@ def build_parser() -> argparse.ArgumentParser:
     check = sub.add_parser(
         "check-assumptions", help="docs/mvp.md 3.1 の「要確認」を実データで調べる"
     )
-    check.add_argument("--months", type=int, default=24, help="調べる月数(既定: 24)")
+    check.add_argument(
+        "--months", type=_positive_int, default=24, help="調べる月数(1以上。既定: 24)"
+    )
     check.set_defaults(func=cmd_check)
     return parser
 

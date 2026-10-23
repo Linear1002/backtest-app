@@ -15,7 +15,7 @@ from engine.reference.indicators import CrossState, compute_cross_states, detect
 from engine.reference.metrics import compute_metrics
 from engine.reference.ratio import recover_split_ratio
 from engine.reference.types import (
-    TRADING_DAYS_PER_YEAR,
+    MAX_WINDOW,
     BacktestResult,
     Bar,
     CorporateActionEvent,
@@ -46,11 +46,17 @@ INT64_MAX = 2**63 - 1
 # --- 入力チェック --------------------------------------------------------------------
 
 
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def validate_params(params: MaCrossParams) -> None:
     """4.3 の入力チェックのうち、パラメータに関するもの。"""
     for value in (params.short_window, params.long_window):
-        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        if not _is_int(value) or value < 1:
             raise EngineInputError("日数は1以上の整数で入力してください")
+        if value > MAX_WINDOW:
+            raise EngineInputError(f"日数は{MAX_WINDOW}以下で入力してください")
     if params.short_window >= params.long_window:
         raise EngineInputError("短期の日数は長期の日数より小さくしてください")
     for rate in (params.fee_rate, params.slippage_rate):
@@ -66,8 +72,10 @@ def validate_params(params: MaCrossParams) -> None:
         raise EngineInputError("初期資金は1円以上で入力してください")
     if params.initial_cash > MAX_INITIAL_CASH:
         raise EngineInputError("初期資金は10億円以下で入力してください")
-    if params.lot_size < 1:
-        raise EngineInputError("売買単位は1以上にしてください")
+    if not _is_int(params.lot_size) or params.lot_size < 1:
+        raise EngineInputError("売買単位は1以上の整数にしてください")
+    if not _is_int(params.trading_days_per_year) or params.trading_days_per_year < 1:
+        raise EngineInputError("年間の営業日数は1以上の整数にしてください")
 
 
 def validate_order(bars: Sequence[Bar]) -> None:
@@ -433,11 +441,11 @@ def run_backtest(
         trades.append(open_trade.as_open_trade())
 
     equities = [record.equity for record in daily]
-    metrics = compute_metrics(equities, params.initial_cash, trades)
+    metrics = compute_metrics(equities, params.initial_cash, trades, params.trading_days_per_year)
     warmup = _warmup_info(loaded, first_period, period_indices, params.long_window, first_judgeable)
     notes = Notes(
         open_position_at_end=shares > 0,
-        annualized_is_reference=metrics.return_count < TRADING_DAYS_PER_YEAR,
+        annualized_is_reference=metrics.return_count < params.trading_days_per_year,
     )
     return BacktestResult(
         params=params,
