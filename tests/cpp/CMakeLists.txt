@@ -1,0 +1,3 @@
+add_executable(build_check_test build_check_test.cpp)
+target_link_libraries(build_check_test PRIVATE GTest::gtest_main)
+gtest_discover_tests(build_check_test)
