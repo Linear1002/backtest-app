@@ -56,7 +56,7 @@ def validate_params(raw: MaCrossParamsIn, lot_size: int) -> MaCrossParams:
             errors.append(
                 ErrorItem(field=key, message="手数料率とスリッページ率は10%未満で入力してください")
             )
-    if not math.isfinite(raw.initial_cash) or raw.initial_cash <= 0:
+    if not math.isfinite(raw.initial_cash) or raw.initial_cash < 1:
         errors.append(
             ErrorItem(field="initial_cash", message="初期資金は1円以上で入力してください")
         )

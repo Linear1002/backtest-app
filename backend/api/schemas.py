@@ -142,6 +142,9 @@ class StrategyListOut(_Model):
 class MaCrossParamsIn(_Model):
     """数値の型だけ確かめ、範囲のチェックは日本語メッセージを出すために API 側で行う。"""
 
+    # Infinity・NaN は「数値で入力してください」にする
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
     short_window: float = Field(5, description="短期移動平均の日数(1以上の整数)")
     long_window: float = Field(25, description="長期移動平均の日数(短期より大きい整数)")
     fee_rate_pct: float = Field(0.1, description="手数料率(%)。0以上10未満")

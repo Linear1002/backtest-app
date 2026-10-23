@@ -165,6 +165,7 @@ def test_insufficient_cash_is_reported(client: TestClient) -> None:
             "手数料率とスリッページ率は10%未満で入力してください",
         ),
         ({"initial_cash": 0}, "initial_cash", "初期資金は1円以上で入力してください"),
+        ({"initial_cash": 0.5}, "initial_cash", "初期資金は1円以上で入力してください"),
         ({"initial_cash": 1_000_000_001}, "initial_cash", "初期資金は10億円以下で入力してください"),
         ({"short_window": "abc"}, "short_window", "数値で入力してください"),
     ],
@@ -203,6 +204,19 @@ def test_period_errors_are_japanese(client: TestClient, period: dict, message: s
     response = client.post("/api/backtests", json={"symbol_id": "DEMO:1001", **period})
     assert response.status_code == 422
     assert message in [e["message"] for e in response.json()["errors"]]
+
+
+def test_infinite_numbers_are_rejected(client: TestClient) -> None:
+    # JSON の規格外だが Python の json は Infinity を読めるので、文字列で直接送る
+    response = client.post(
+        "/api/backtests",
+        content='{"symbol_id": "DEMO:1001", "params": {"fee_rate_pct": Infinity}}',
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 422
+    assert {"field": "fee_rate_pct", "message": "数値で入力してください"} in response.json()[
+        "errors"
+    ]
 
 
 def test_unknown_symbol_and_unconfigured_market(client: TestClient) -> None:
