@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.2  # このアクションはメジャータグ(v10)を出していないため完全なバージョンで固定
         with:
           enable-cache: true
       # .python-version の Python を uv が入れ、uv.lock どおりに依存を入れる
