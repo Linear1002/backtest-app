@@ -72,11 +72,14 @@ export function ParamsStep({
       >
         <Group title="期間" note={`データの期間:${formatDate(range.first_date)}〜${formatDate(range.last_date)}`}>
           <div className="flex flex-wrap gap-2">
-            {PERIOD_PRESETS.map((preset) => {
+            {PERIOD_PRESETS.map((preset, index) => {
               const value = presetPeriod(range, preset.years);
-              const active = value.start_date === form.start_date && value.end_date === form.end_date;
+              const same = (a: { start_date: string; end_date: string }) =>
+                a.start_date === value.start_date && a.end_date === value.end_date;
+              // データが2年に満たないと「直近2年」は「全期間」と同じ期間になる。同じ期間のチップは出さない
+              if (PERIOD_PRESETS.slice(0, index).some((p) => same(presetPeriod(range, p.years)))) return null;
               return (
-                <Chip key={preset.label} active={active} onClick={() => onChange({ ...form, ...value })}>
+                <Chip key={preset.label} active={same(form)} onClick={() => onChange({ ...form, ...value })}>
                   {preset.label}
                 </Chip>
               );

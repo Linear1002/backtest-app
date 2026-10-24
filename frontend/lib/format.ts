@@ -60,15 +60,6 @@ export function formatShares(value: number): string {
   return `${yen.format(value)}株`;
 }
 
-/** 軸用の短い円表記(12万 / 1.2億 / 4,000)。目盛りには axisLabels を使う。 */
-export function formatYenCompact(value: number): string {
-  const abs = Math.abs(value);
-  const sign = value < 0 ? "−" : "";
-  if (abs >= 1e8) return `${sign}${trim(abs / 1e8)}億`;
-  if (abs >= 1e4) return `${sign}${trim(abs / 1e4)}万`;
-  return `${sign}${yen.format(abs)}`;
-}
-
 function trim(n: number): string {
   const fixed = n >= 100 ? n.toFixed(0) : n >= 10 ? n.toFixed(1) : n.toFixed(2);
   // 小数点以下の末尾の 0 だけを消す(150 の 0 は消さない)

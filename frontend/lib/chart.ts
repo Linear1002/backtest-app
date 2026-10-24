@@ -19,31 +19,40 @@ export function linearScale(domain: [number, number], range: [number, number]): 
   return scale;
 }
 
+/** 目盛りの数の上限(計算の誤りで目盛りが増え続けないようにする安全網) */
+const MAX_TICKS = 50;
+
+/** 2つの値が「ほぼ同じ」か(差が値の大きさの 1e-9 倍以下)。浮動小数点の数 ulp の違いは同じとみなす。 */
+function nearlyEqual(a: number, b: number): boolean {
+  return Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
+}
+
 /** 1・2・2.5・5 × 10^n の「きりのいい」目盛りと、その間隔(step)。間隔は目盛りの数字の桁数を決めるのに使う。 */
 export function niceScale(min: number, max: number, count = 5): { ticks: number[]; step: number } {
   if (!Number.isFinite(min) || !Number.isFinite(max)) return { ticks: [], step: 0 };
-  if (min === max) {
-    const pad = Math.abs(min) * 0.05 || 1;
-    min -= pad;
-    max += pad;
+  if (max < min) [min, max] = [max, min];
+  // 同じ値・ほぼ同じ値(1 ulp の違いなど)は、幅をもたせてから目盛りを決める。
+  // そのままだと間隔が値の ulp より小さくなり、v + step が v と同じになって目盛りの計算が終わらない
+  if (nearlyEqual(min, max)) {
+    const center = (min + max) / 2;
+    const pad = Math.abs(center) * 0.05 || 1;
+    min = center - pad;
+    max = center + pad;
   }
   const rawStep = (max - min) / Math.max(1, count);
   const power = 10 ** Math.floor(Math.log10(rawStep));
   const step = [1, 2, 2.5, 5, 10].map((m) => m * power).find((s) => s >= rawStep) ?? 10 * power;
-  const start = Math.ceil(min / step) * step;
+  const first = Math.ceil(min / step);
+  const last = Math.floor(max / step + 1e-9);
   const ticks: number[] = [];
-  for (let v = start; v <= max + step * 1e-9; v += step) {
-    ticks.push(Number(v.toPrecision(12)));
+  // v += step を繰り返すと誤差がたまるので、番号 × 間隔で作る。数にも上限を付ける
+  for (let k = first; k <= last && ticks.length < MAX_TICKS; k += 1) {
+    ticks.push(Number((k * step).toPrecision(12)));
   }
   return { ticks, step: Number(step.toPrecision(12)) };
 }
 
-/** きりのいい目盛り(niceScale の目盛りだけ)。 */
-export function niceTicks(min: number, max: number, count = 5): number[] {
-  return niceScale(min, max, count).ticks;
-}
-
-/** 目盛りを含むように広げた範囲(上下に少し余白を足す)。 */
+/** 目盛りを含むように広げた範囲(上下に少し余白を足す)。値がほぼ同じでも、幅のある範囲にする。 */
 export function paddedExtent(values: Iterable<number>, padRatio = 0.06): [number, number] {
   let min = Infinity;
   let max = -Infinity;
@@ -53,7 +62,7 @@ export function paddedExtent(values: Iterable<number>, padRatio = 0.06): [number
     if (v > max) max = v;
   }
   if (min === Infinity) return [0, 1];
-  const pad = (max - min) * padRatio || Math.abs(max) * 0.05 || 1;
+  const pad = nearlyEqual(min, max) ? Math.abs(max) * 0.05 || 1 : (max - min) * padRatio;
   return [min - pad, max + pad];
 }
 

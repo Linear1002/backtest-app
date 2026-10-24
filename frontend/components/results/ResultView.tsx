@@ -24,8 +24,11 @@ import { TimeSeriesCharts } from "./TimeSeriesCharts.tsx";
 
 const TONE = { up: "text-shu", down: "text-ai", flat: "text-ink" } as const;
 
-/** 結果が出たときの動き(線を描く・印を押す)が終わるまでの時間。終わったら「再生済み」にする */
-const ANIMATION_MS = 1600;
+/**
+ * 結果が出たときの動き(線を描く・印を押す)が終わるまでの時間。終わったら「再生済み」にする。
+ * globals.css のいちばん長い動き(印の遅れ 最大900ms + 500ms + 押す動き 260ms = 1660ms)より長くする
+ */
+const ANIMATION_MS = 1800;
 
 export function ResultView({
   record,
@@ -86,7 +89,14 @@ function Statement({
   return (
     <header className="grid gap-6 lg:grid-cols-[1fr_auto] lg:items-end">
       <div>
-        <h2 id={headingId} className="text-[24px] font-bold text-ink sm:text-[28px]">
+        {/* 結果が出たら、ほかの手順と同じく見出しにフォーカスを移す(BacktestApp) */}
+        <h2
+          id={headingId}
+          data-step-heading
+          tabIndex={-1}
+          className="text-[24px] font-bold text-ink outline-none sm:text-[28px]"
+        >
+          <span className="sr-only">手順5:結果 </span>
           {result.symbol.name}
           <span className="ml-3 tabular text-[15px] font-normal text-ink-2">{result.symbol.id}</span>
         </h2>

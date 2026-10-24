@@ -41,6 +41,16 @@ test("受け付ける数値の形", () => {
   }
 });
 
+test("カンマは3桁区切りの位置だけ受け付ける(「0,1」を黙って 1 にしない)", () => {
+  assert.equal(toNumber("1,000,000"), 1_000_000);
+  assert.equal(toNumber("１，０００"), 1000); // 全角のカンマも3桁区切りなら可
+  assert.equal(toNumber("-1,234.5"), -1234.5);
+  for (const bad of ["0,1", "1,5", "1,00", "1,0000", ",100", "100,", "1,,000"]) {
+    assert.equal(toNumber(bad), null, bad);
+  }
+  assert.equal(errorOf("fee_rate_pct", "0,1"), "数値で入力してください");
+});
+
 test("正しい入力は数値になる", () => {
   const { params, errors } = parseParams(form({ initial_cash: "１,０００,０００" }), SPECS);
   assert.deepEqual(errors, {});

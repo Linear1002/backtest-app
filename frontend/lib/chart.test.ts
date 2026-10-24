@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { areaPath, dateTicks, linearScale, linePath, nearestIndex, niceScale, niceTicks, paddedExtent } from "./chart.ts";
+import { areaPath, dateTicks, linearScale, linePath, nearestIndex, niceScale, paddedExtent } from "./chart.ts";
 
 /** 平日だけの日付の並び(祝日は考えない)。 */
 function weekdays(fromIso: string, count: number): string[] {
@@ -23,13 +23,31 @@ test("線形スケールと逆変換", () => {
   assert.equal(nearestIndex(s, 9999, 101), 100);
 });
 
+const ticks = (min: number, max: number, count?: number) => niceScale(min, max, count).ticks;
+
 test("きりのいい目盛り", () => {
-  assert.deepEqual(niceTicks(0, 100, 5), [0, 20, 40, 60, 80, 100]);
-  assert.deepEqual(niceTicks(3400, 12100, 4), [5000, 7500, 10000]);
-  assert.deepEqual(niceTicks(0.95, 1.85, 4), [1, 1.25, 1.5, 1.75]);
-  assert.ok(niceTicks(5, 5).length > 0);
+  assert.deepEqual(ticks(0, 100, 5), [0, 20, 40, 60, 80, 100]);
+  assert.deepEqual(ticks(3400, 12100, 4), [5000, 7500, 10000]);
+  assert.deepEqual(ticks(0.95, 1.85, 4), [1, 1.25, 1.5, 1.75]);
+  assert.ok(ticks(5, 5).length > 0);
+  assert.deepEqual(ticks(100, 0, 5), [0, 20, 40, 60, 80, 100]); // 大小が逆でもよい
   assert.deepEqual(niceScale(940_000, 1_060_000, 5), { ticks: [950_000, 975_000, 1_000_000, 1_025_000, 1_050_000], step: 25_000 });
   assert.deepEqual(niceScale(Number.NaN, 1), { ticks: [], step: 0 });
+});
+
+test("ほぼ同じ2つの値(1 ulp 違い)でも、目盛りの計算が終わり、数が限られる", () => {
+  for (const [min, max] of [
+    [1000, 1000 + 2 ** -43],
+    [0.1, 0.1 + Number.EPSILON / 8],
+    [-5, -5 + 1e-15],
+    [1e9, 1e9 + 1e-6],
+  ]) {
+    const { ticks: t, step } = niceScale(min, max, 5);
+    assert.ok(t.length > 0 && t.length <= 50, `${min}〜${max}: ${t.length}本`);
+    assert.ok(step > 0 && min + step !== min, `${min}〜${max}: 間隔 ${step}`);
+  }
+  const [lo, hi] = paddedExtent([1000, 1000 + 2 ** -43]);
+  assert.ok(hi - lo > 1, `${lo}〜${hi}`);
 });
 
 test("余白つきの範囲", () => {
