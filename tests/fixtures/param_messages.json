@@ -194,6 +194,22 @@
       "field": "fee_rate_pct",
       "message": "手数料率とスリッページ率は0以上で入力してください",
       "frontend_only": true
+    },
+    {
+      "params": {
+        "fee_rate_pct": "0,005"
+      },
+      "field": "fee_rate_pct",
+      "message": "数値で入力してください",
+      "frontend_only": true
+    },
+    {
+      "params": {
+        "initial_cash": "0,100"
+      },
+      "field": "initial_cash",
+      "message": "数値で入力してください",
+      "frontend_only": true
     }
   ]
 }

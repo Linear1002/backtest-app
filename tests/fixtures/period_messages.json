@@ -1,0 +1,17 @@
+{
+  "_説明": "期間の入力 → 誤りのメッセージ の表。画面(frontend/lib/form.test.ts の validatePeriod)と API(tests/python/test_param_contract.py の validate_period)の両方がこの表を読む。データの範囲は range(架空データ DEMO:1001 と同じ)。field と message が null なら誤りなし。only は、片方だけが確かめる誤り(frontend:入力欄の文字の形、api:営業日の数。画面はデータを持たないので確かめない)。",
+  "range": { "first_date": "2022-01-04", "last_date": "2026-07-31" },
+  "cases": [
+    { "start_date": "2022-01-04", "end_date": "2026-07-31", "field": null, "message": null, "only": null },
+    { "start_date": "2025-06-30", "end_date": "2025-01-01", "field": "start_date", "message": "開始日は終了日より前の日付にしてください", "only": null },
+    { "start_date": "2027-01-01", "end_date": "2021-01-01", "field": "start_date", "message": "開始日は終了日より前の日付にしてください", "only": null },
+    { "start_date": "2021-01-01", "end_date": "2026-07-31", "field": "start_date", "message": "指定した期間のデータがありません(取得可能:2022-01-04〜2026-07-31)", "only": null },
+    { "start_date": "2022-01-04", "end_date": "2026-08-01", "field": "end_date", "message": "指定した期間のデータがありません(取得可能:2022-01-04〜2026-07-31)", "only": null },
+    { "start_date": "2021-01-01", "end_date": "2026-08-01", "field": "start_date", "message": "指定した期間のデータがありません(取得可能:2022-01-04〜2026-07-31)", "only": null },
+    { "start_date": "2025-01-04", "end_date": "2025-01-05", "field": "start_date", "message": "期間が短すぎます。営業日が3日以上になるように指定してください", "only": "api" },
+    { "start_date": "2026-07-30", "end_date": "2026-07-31", "field": "start_date", "message": "期間が短すぎます。営業日が3日以上になるように指定してください", "only": "api" },
+    { "start_date": "2026-07-29", "end_date": "2026-07-31", "field": null, "message": null, "only": null },
+    { "start_date": "", "end_date": "2026-07-31", "field": "start_date", "message": "日付は YYYY-MM-DD の形で入力してください", "only": "frontend" },
+    { "start_date": "2022-01-04", "end_date": "2026-7-31", "field": "end_date", "message": "日付は YYYY-MM-DD の形で入力してください", "only": "frontend" }
+  ]
+}

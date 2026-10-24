@@ -4,18 +4,21 @@
   画面のテスト(frontend/lib/testing.ts)はこのファイルを読むので、定義を変えたら作り直す:
       uv run python -m tests.python.test_param_contract
 - tests/fixtures/param_messages.json:入力 → 誤りのメッセージ の表。画面のテストも同じ表を読む
+- tests/fixtures/period_messages.json:期間の入力 → 誤りのメッセージ の表。画面のテストも同じ表を読む
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 from pathlib import Path
 
 import pytest
 
 from backend.api.schemas import MaCrossParamsIn, ParamOut
-from backend.api.validation import InputValidationError, validate_params
-from backend.marketdata.models import SymbolId
+from backend.api.validation import InputValidationError, validate_params, validate_period
+from backend.marketdata.models import DateRange, SymbolId
+from backend.marketdata.synthetic import generate_bars
 from backend.strategies import STRATEGIES_BY_ID
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
@@ -57,8 +60,37 @@ def test_api_gives_the_same_message_as_the_screen(case: dict) -> None:
         return
     with pytest.raises(InputValidationError) as caught:
         validate_params(raw, market)
-    errors = {e.field: e.message for e in caught.value.errors}
-    assert errors.get(case["field"]) == case["message"], errors
+    # 表で指定した欄だけに、その文が出る(ほかの欄に余計な誤りが出ていないことも確かめる)
+    assert {e.field: e.message for e in caught.value.errors} == {case["field"]: case["message"]}
+
+
+PERIODS = json.loads((FIXTURES / "period_messages.json").read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def demo_bars() -> list:
+    return list(generate_bars("1001"))
+
+
+@pytest.mark.parametrize(
+    "case",
+    [c for c in PERIODS["cases"] if c["only"] != "frontend"],
+    ids=lambda c: f"{c['start_date']}..{c['end_date']}",
+)
+def test_api_gives_the_same_period_message_as_the_screen(case: dict, demo_bars: list) -> None:
+    available = DateRange(
+        dt.date.fromisoformat(PERIODS["range"]["first_date"]),
+        dt.date.fromisoformat(PERIODS["range"]["last_date"]),
+    )
+    assert (demo_bars[0].date, demo_bars[-1].date) == (available.first, available.last)
+    start = dt.date.fromisoformat(case["start_date"])
+    end = dt.date.fromisoformat(case["end_date"])
+    if case["field"] is None:
+        validate_period(start, end, available, demo_bars)
+        return
+    with pytest.raises(InputValidationError) as caught:
+        validate_period(start, end, available, demo_bars)
+    assert {e.field: e.message for e in caught.value.errors} == {case["field"]: case["message"]}
 
 
 if __name__ == "__main__":

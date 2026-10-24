@@ -11,6 +11,7 @@ from backend.marketdata.jquants import (
     JQuantsClient,
     JQuantsDataSource,
     RateLimiter,
+    _wait_text,
     from_jquants_code,
     parse_daily_bar,
     parse_symbol,
@@ -314,6 +315,22 @@ def test_rate_limiter_block_for_makes_everyone_wait() -> None:
     limiter.block_for(WAIT_AFTER_429_SECONDS)
     limiter.acquire()
     assert clock.sleeps and clock.sleeps[0] >= WAIT_AFTER_429_SECONDS
+
+
+@pytest.mark.parametrize(
+    ("seconds", "text"),
+    [
+        (0.2, "約1秒"),
+        (61.0, "約61秒"),
+        (89.9, "約90秒"),
+        (90.0, "約2分"),
+        (120.0, "約2分"),
+        (121.0, "約3分"),
+    ],
+)
+def test_wait_text_switches_to_minutes_at_90_seconds(seconds: float, text: str) -> None:
+    """待ち時間の目安は、90秒未満なら秒、それ以上なら分で書く(どちらも切り上げ)。"""
+    assert _wait_text(seconds) == text
 
 
 def test_rate_limiter_refuses_to_wait_longer_than_max_wait() -> None:
