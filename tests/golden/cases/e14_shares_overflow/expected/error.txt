@@ -1,0 +1,2 @@
+kind=data
+message=株数が大きすぎて計算できません

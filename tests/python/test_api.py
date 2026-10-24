@@ -441,3 +441,22 @@ def test_delisted_symbol_is_refused_when_listing_is_known(tmp_path) -> None:
     )
     response = client.post("/api/backtests", json={"symbol_id": "TSE:7203"})
     assert response.status_code == 404 and "上場廃止" in response.json()["detail"]
+
+
+def test_cpp_engine_errors_are_translated(client: TestClient, monkeypatch) -> None:
+    class InputError(ValueError):
+        pass
+
+    class DataError(ValueError):
+        pass
+
+    def run_ma_cross(rows, start, end, params):
+        raise DataError("調整係数がおかしい(テスト)")
+
+    fake = types.SimpleNamespace(
+        run_ma_cross=run_ma_cross, InputError=InputError, DataError=DataError
+    )
+    monkeypatch.setitem(sys.modules, "backtest_cpp", fake)
+    response = client.post("/api/backtests", json={"symbol_id": "DEMO:1001", "engine": "cpp"})
+    assert response.status_code == 422
+    assert "調整係数がおかしい" in response.json()["detail"]

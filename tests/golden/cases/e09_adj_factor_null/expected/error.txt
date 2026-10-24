@@ -1,0 +1,2 @@
+kind=data
+message=2025-01-09 の調整係数が Null です

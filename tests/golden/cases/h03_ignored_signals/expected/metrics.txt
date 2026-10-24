@@ -1,0 +1,8 @@
+total_return=0.010000000000000009
+annualized_return=0.5012606320287252
+max_drawdown=0.0
+sharpe_ratio=6.390096504226939
+win_rate=
+trade_count=0
+winning_trades=0
+return_count=6

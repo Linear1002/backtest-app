@@ -1,0 +1,2 @@
+kind=data
+message=2025-01-08 は始値と終値の片方だけが Null です

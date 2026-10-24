@@ -1,0 +1,9 @@
+start=2025-01-08
+end=2025-01-09
+short_window=1
+long_window=2
+fee_rate=0.0
+slippage_rate=0.0
+initial_cash=1000000.0
+lot_size=100
+trading_days_per_year=245

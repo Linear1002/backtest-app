@@ -16,7 +16,14 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from engine.reference import BacktestResult, Bar, MaCrossParams, run_backtest
+from engine.reference import (
+    BacktestResult,
+    Bar,
+    EngineDataError,
+    EngineInputError,
+    MaCrossParams,
+    run_backtest,
+)
 from engine.reference.metrics import compute_metrics
 from engine.reference.types import (
     CorporateActionEvent,
@@ -104,8 +111,27 @@ def _date(value: str | None) -> dt.date | None:
 def run_cpp(
     module: Any, bars: Sequence[Bar], start: dt.date, end: dt.date, params: MaCrossParams
 ) -> BacktestResult:
-    """pybind11 モジュールの run_ma_cross を呼び、結果を BacktestResult に変換する。"""
-    raw = module.run_ma_cross(
+    """pybind11 モジュールの run_ma_cross を呼び、結果を BacktestResult に変換する。
+
+    C++ 側の InputError / DataError は、リファレンスと同じ EngineInputError / EngineDataError に読み替える。
+    """
+    input_error = getattr(module, "InputError", None)
+    data_error = getattr(module, "DataError", None)
+    try:
+        raw = _call_cpp(module, bars, start, end, params)
+    except Exception as error:
+        if input_error is not None and isinstance(error, input_error):
+            raise EngineInputError(str(error)) from None
+        if data_error is not None and isinstance(error, data_error):
+            raise EngineDataError(str(error)) from None
+        raise
+    return convert_cpp_result(raw, start, end, params)
+
+
+def _call_cpp(
+    module: Any, bars: Sequence[Bar], start: dt.date, end: dt.date, params: MaCrossParams
+) -> dict[str, Any]:
+    return module.run_ma_cross(
         [
             (
                 bar.date.isoformat(),
@@ -131,7 +157,6 @@ def run_cpp(
             "trading_days_per_year": params.trading_days_per_year,
         },
     )
-    return convert_cpp_result(raw, start, end, params)
 
 
 def convert_cpp_result(

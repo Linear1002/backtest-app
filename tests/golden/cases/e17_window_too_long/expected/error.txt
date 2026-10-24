@@ -1,0 +1,2 @@
+kind=input
+message=日数は1000以下で入力してください

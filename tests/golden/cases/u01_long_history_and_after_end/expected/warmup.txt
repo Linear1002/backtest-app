@@ -1,0 +1,5 @@
+first_date=2025-02-24
+last_date=2025-02-28
+valid_days=5
+sufficient=true
+signals_unavailable_until=

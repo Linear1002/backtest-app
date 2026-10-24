@@ -2,7 +2,7 @@
 
 BUILD_DIR := build
 
-.PHONY: setup test lint dev-api dev-web data-symbols data-fetch data-info data-check
+.PHONY: setup test lint dev-api dev-web data-symbols data-fetch data-info data-check golden test-cpp cpp-case
 
 # 依存ライブラリのインストールと C++ のビルド設定(最初に1回、依存が変わったときに実行)
 # --locked:uv.lock を勝手に書き換えない(CI と同じ)。依存を変えるときは uv add / uv lock を使う
@@ -14,10 +14,11 @@ setup: $(BUILD_DIR)/CMakeCache.txt
 $(BUILD_DIR)/CMakeCache.txt:
 	cmake -S . -B $(BUILD_DIR) -G Ninja
 
-# Python のテスト、C++ のビルド・テスト、画面の関数のテスト
+# C++ のビルド → Python のテスト(C++ 版があれば正解データとの答え合わせも)→ C++ のテスト → 画面の関数のテスト
+# C++ を先にビルドするのは、答え合わせが古い backtest_cli と比べてしまわないようにするため
 test: $(BUILD_DIR)/CMakeCache.txt
-	uv run pytest
 	cmake --build $(BUILD_DIR)
+	BACKTEST_CPP_UPTO=$(UPTO) uv run pytest
 	ctest --test-dir $(BUILD_DIR) --output-on-failure
 	npm --prefix frontend test
 
@@ -52,3 +53,25 @@ data-info:
 # docs/mvp.md 3.1 の「要確認」(調整係数の桁数など)を実データで調べる(10分ほどかかる)
 data-check:
 	uv run python -m backend.marketdata check-assumptions
+
+# --- C++ 版エンジンの答え合わせ(docs/cpp/README.md) ---
+
+# いま取り組んでいるマイルストーン(M2〜M6)を engine/cpp/MILESTONE に書いておくと、
+# そこまでに合格するはずのケース・項目だけを比べる(CI も同じファイルを読む)。ファイルがなければ M6(すべて)
+UPTO ?= $(shell cat engine/cpp/MILESTONE 2>/dev/null || echo M6)
+
+# 正解データ(tests/golden)をリファレンス実装で作り直す
+golden:
+	uv run python scripts/make_golden.py
+
+# C++ 版をビルドして、ゴールデンケースと比べる。マイルストーンを指定するなら make test-cpp UPTO=M3
+test-cpp: $(BUILD_DIR)/CMakeCache.txt
+	cmake --build $(BUILD_DIR)
+	BACKTEST_CPP_UPTO=$(UPTO) uv run pytest tests/python/test_golden.py -k cpp -v
+
+# 1つのケースだけ C++ 版で動かして比べる。例: make cpp-case CASE=h01_round_trip
+cpp-case: $(BUILD_DIR)/CMakeCache.txt
+	cmake --build $(BUILD_DIR)
+	rm -rf $(BUILD_DIR)/case-out
+	-$(BUILD_DIR)/engine/cpp/backtest_cli tests/golden/cases/$(CASE)/input $(BUILD_DIR)/case-out
+	uv run python -m engine.reference.compare tests/golden/cases/$(CASE)/expected $(BUILD_DIR)/case-out
