@@ -2,7 +2,7 @@
 
 BUILD_DIR := build
 
-.PHONY: setup test lint dev-api dev-web data-symbols data-fetch data-info
+.PHONY: setup test lint dev-api dev-web data-symbols data-fetch data-info data-check
 
 # 依存ライブラリのインストールと C++ のビルド設定(最初に1回、依存が変わったときに実行)
 # --locked:uv.lock を勝手に書き換えない(CI と同じ)。依存を変えるときは uv add / uv lock を使う
@@ -47,3 +47,7 @@ data-fetch:
 # 保存済みデータの範囲と権利落ちを表示する。例: make data-info SYMBOL=DEMO:1003
 data-info:
 	uv run python -m backend.marketdata info $(SYMBOL)
+
+# docs/mvp.md 3.1 の「要確認」(調整係数の桁数など)を実データで調べる(10分ほどかかる)
+data-check:
+	uv run python -m backend.marketdata check-assumptions
