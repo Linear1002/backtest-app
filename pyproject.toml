@@ -21,6 +21,8 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests/python"]
 pythonpath = ["."]
+# Starlette の TestClient が「httpx の代わりに httpx2 を使って」と警告を出す。動作には影響しないので表示しない
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient` is deprecated"]
 
 [tool.ruff]
 target-version = "py314"

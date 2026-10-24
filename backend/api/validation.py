@@ -1,0 +1,148 @@
+"""バックテストの入力チェック(docs/mvp.md 4.3)。
+
+- パラメータの誤りは、まとめて返す(1つ直すたびに次のエラーが出ると使いにくいため)
+- 期間のチェックはデータを読んでから行うので、パラメータに誤りがあるときは、そこまで進まない
+- 範囲の数値は backend/strategies.py の ParamSpec が正(画面の入力チェックも同じ定義を使う)
+- メッセージは仕様の表のとおり
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import math
+from dataclasses import dataclass
+
+from backend.api.schemas import ErrorItem, MaCrossParamsIn
+from backend.marketdata.models import DailyBar, DateRange, MarketConfig
+from backend.strategies import MA_CROSS_PARAMS, ParamSpec
+from engine.reference import MaCrossParams
+
+MIN_BUSINESS_DAYS = 3
+
+
+class InputValidationError(Exception):
+    def __init__(self, errors: list[ErrorItem]) -> None:
+        super().__init__("入力内容を確認してください")
+        self.errors = errors
+
+
+@dataclass(frozen=True)
+class ValidatedPeriod:
+    start: dt.date
+    end: dt.date
+
+
+def _is_whole(value: float) -> bool:
+    return math.isfinite(value) and float(value).is_integer()
+
+
+def _number_text(value: float) -> str:
+    """1000.0 → "1000"、1e9 → "10億" のように、メッセージに入れる数値を短く書く。"""
+    if value >= 1e8 and value % 1e8 == 0:
+        return f"{int(value // 1e8)}億"
+    return f"{int(value)}" if float(value).is_integer() else f"{value}"
+
+
+def _exceeded_maximum(spec: ParamSpec, value: float) -> float | None:
+    """上限を超えていれば、その上限を返す(上限がない・超えていないときは None)。"""
+    if spec.maximum is None:
+        return None
+    over = value >= spec.maximum if spec.exclusive_maximum else value > spec.maximum
+    return spec.maximum if over else None
+
+
+def check_param(spec: ParamSpec, value: float) -> str | None:
+    """1つのパラメータを ParamSpec の範囲で確かめる。誤りがあればメッセージ(仕様 4.3 の文)を返す。
+
+    画面の入力チェック(frontend/lib/form.ts の checkSpec)と、同じ判定・同じ文にする。
+    両方が同じ答えを返すことは tests/fixtures/param_messages.json で確かめている。
+    """
+    maximum = _exceeded_maximum(spec, value)
+    if spec.kind == "integer":
+        if not _is_whole(value) or value < spec.minimum:
+            return f"日数は{_number_text(spec.minimum)}以上の整数で入力してください"
+        if maximum is not None:
+            return f"日数は{_number_text(maximum)}以下で入力してください"
+        return None
+    if spec.kind == "percent":
+        if not math.isfinite(value) or value < spec.minimum:
+            return f"手数料率とスリッページ率は{_number_text(spec.minimum)}以上で入力してください"
+        if maximum is not None:
+            bound = "未満" if spec.exclusive_maximum else "以下"
+            return f"手数料率とスリッページ率は{_number_text(maximum)}%{bound}で入力してください"
+        return None
+    if spec.kind == "yen":
+        if not math.isfinite(value) or value < spec.minimum:
+            return f"初期資金は{_number_text(spec.minimum)}円以上で入力してください"
+        if maximum is not None:
+            return f"初期資金は{_number_text(maximum)}円以下で入力してください"
+        return None
+    raise ValueError(f"知らないパラメータの種類です: {spec.kind}")
+
+
+def validate_params(raw: MaCrossParamsIn, market: MarketConfig) -> MaCrossParams:
+    errors: list[ErrorItem] = []
+    for spec in MA_CROSS_PARAMS:
+        message = check_param(spec, getattr(raw, spec.key))
+        if message:
+            errors.append(ErrorItem(field=spec.key, message=message))
+    windows_ok = not any(e.field in ("short_window", "long_window") for e in errors)
+    if windows_ok and raw.short_window >= raw.long_window:
+        # 移動平均クロスだけの決まり。画面と同じく、短期の欄に出す
+        errors.insert(
+            0,
+            ErrorItem(field="short_window", message="短期の日数は長期の日数より小さくしてください"),
+        )
+    if errors:
+        raise InputValidationError(errors)
+    return MaCrossParams(
+        short_window=int(raw.short_window),
+        long_window=int(raw.long_window),
+        # 画面とのやり取りは %。エンジンには割合を渡す(4.2)
+        fee_rate=raw.fee_rate_pct / 100,
+        slippage_rate=raw.slippage_rate_pct / 100,
+        initial_cash=float(raw.initial_cash),
+        lot_size=market.lot_size,
+        trading_days_per_year=market.trading_days_per_year,
+    )
+
+
+def validate_period(
+    start: dt.date | None,
+    end: dt.date | None,
+    available: DateRange,
+    bars: list[DailyBar],
+) -> ValidatedPeriod:
+    """期間のチェック。省略された端は、その銘柄のデータの端にする(4.2)。
+
+    データの範囲のチェックはここ(API)だけで行う。計算エンジンは銘柄本来の範囲を知らないため(4.3)。
+    """
+    start = start or available.first
+    end = end or available.last
+    if start > end:
+        raise InputValidationError(
+            [ErrorItem(field="start_date", message="開始日は終了日より前の日付にしてください")]
+        )
+    if start < available.first or end > available.last:
+        raise InputValidationError(
+            [
+                ErrorItem(
+                    field="start_date" if start < available.first else "end_date",
+                    message=(
+                        "指定した期間のデータがありません"
+                        f"(取得可能:{available.first.isoformat()}〜{available.last.isoformat()})"
+                    ),
+                )
+            ]
+        )
+    business_days = sum(1 for bar in bars if start <= bar.date <= end)
+    if business_days < MIN_BUSINESS_DAYS:
+        raise InputValidationError(
+            [
+                ErrorItem(
+                    field="start_date",
+                    message="期間が短すぎます。営業日が3日以上になるように指定してください",
+                )
+            ]
+        )
+    return ValidatedPeriod(start, end)

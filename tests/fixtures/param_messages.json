@@ -1,0 +1,199 @@
+{
+  "_説明": "パラメータの入力 → 誤りのメッセージ の表。画面(frontend/lib/form.test.ts)と API (tests/python/test_param_contract.py)の両方がこの表を読み、同じ判定・同じ文になることを確かめる。params は既定値(5・25・0.1・0.05・1000000)からの変更。field と message が null なら誤りなし。frontend_only は、画面の入力欄だけで起きる文字の形(API には数値として届く)。",
+  "cases": [
+    {
+      "params": {
+        "short_window": "0"
+      },
+      "field": "short_window",
+      "message": "日数は1以上の整数で入力してください",
+      "frontend_only": false
+    },
+    {
+      "params": {
+        "short_window": "2.5"
+      },
+      "field": "short_window",
+      "message": "日数は1以上の整数で入力してください",
+      "frontend_only": false
+    },
+    {
+      "params": {
+        "long_window": "1000"
+      },
+      "field": null,
+      "message": null,
+      "frontend_only": false
+    },
+    {
+      "params": {
+        "long_window": "1001"
+      },
+      "field": "long_window",
+      "message": "日数は1000以下で入力してください",
+      "frontend_only": false
+    },
+    {
+      "params": {
+        "short_window": "1e21"
+      },
+      "field": "short_window",
+      "message": "日数は1000以下で入力してください",
+      "frontend_only": false
+    },
+    {
+      "params": {
+        "short_window": "25",
+        "long_window": "5"
+      },
+      "field": "short_window",
+      "message": "短期の日数は長期の日数より小さくしてください",
+      "frontend_only": false
+    },
+    {
+      "params": {
+        "short_window": "25",
+        "long_window": "25"
+      },
+      "field": "short_window",
+      "message": "短期の日数は長期の日数より小さくしてください",
+      "frontend_only": false
+    },
+    {
+      "params": {
+        "fee_rate_pct": "-1"
+      },
+      "field": "fee_rate_pct",
+      "message": "手数料率とスリッページ率は0以上で入力してください",
+      "frontend_only": false
+    },
+    {
+      "params": {
+        "fee_rate_pct": "0"
+      },
+      "field": null,
+      "message": null,
+      "frontend_only": false
+    },
+    {
+      "params": {
+        "fee_rate_pct": "9.99"
+      },
+      "field": null,
+      "message": null,
+      "frontend_only": false
+    },
+    {
+      "params": {
+        "slippage_rate_pct": "10"
+      },
+      "field": "slippage_rate_pct",
+      "message": "手数料率とスリッページ率は10%未満で入力してください",
+      "frontend_only": false
+    },
+    {
+      "params": {
+        "fee_rate_pct": "0.0000001"
+      },
+      "field": null,
+      "message": null,
+      "frontend_only": false
+    },
+    {
+      "params": {
+        "initial_cash": "0"
+      },
+      "field": "initial_cash",
+      "message": "初期資金は1円以上で入力してください",
+      "frontend_only": false
+    },
+    {
+      "params": {
+        "initial_cash": "0.5"
+      },
+      "field": "initial_cash",
+      "message": "初期資金は1円以上で入力してください",
+      "frontend_only": false
+    },
+    {
+      "params": {
+        "initial_cash": "1"
+      },
+      "field": null,
+      "message": null,
+      "frontend_only": false
+    },
+    {
+      "params": {
+        "initial_cash": "1000000000"
+      },
+      "field": null,
+      "message": null,
+      "frontend_only": false
+    },
+    {
+      "params": {
+        "initial_cash": "1000000001"
+      },
+      "field": "initial_cash",
+      "message": "初期資金は10億円以下で入力してください",
+      "frontend_only": false
+    },
+    {
+      "params": {
+        "initial_cash": "abc"
+      },
+      "field": "initial_cash",
+      "message": "数値で入力してください",
+      "frontend_only": true
+    },
+    {
+      "params": {
+        "initial_cash": ""
+      },
+      "field": "initial_cash",
+      "message": "数値で入力してください",
+      "frontend_only": true
+    },
+    {
+      "params": {
+        "initial_cash": "0x10"
+      },
+      "field": "initial_cash",
+      "message": "数値で入力してください",
+      "frontend_only": true
+    },
+    {
+      "params": {
+        "fee_rate_pct": "0,1"
+      },
+      "field": "fee_rate_pct",
+      "message": "数値で入力してください",
+      "frontend_only": true
+    },
+    {
+      "params": {
+        "initial_cash": "1,000,000"
+      },
+      "field": null,
+      "message": null,
+      "frontend_only": true
+    },
+    {
+      "params": {
+        "initial_cash": "１，０００，０００"
+      },
+      "field": null,
+      "message": null,
+      "frontend_only": true
+    },
+    {
+      "params": {
+        "fee_rate_pct": "−1"
+      },
+      "field": "fee_rate_pct",
+      "message": "手数料率とスリッページ率は0以上で入力してください",
+      "frontend_only": true
+    }
+  ]
+}

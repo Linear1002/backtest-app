@@ -1,0 +1,57 @@
+[
+  {
+    "key": "short_window",
+    "label": "短期移動平均の日数",
+    "kind": "integer",
+    "default": 5.0,
+    "minimum": 1.0,
+    "maximum": 1000.0,
+    "exclusive_maximum": false,
+    "step": 1.0,
+    "help": "直近何営業日の終値で短期線を作るか。長期の日数より小さくする"
+  },
+  {
+    "key": "long_window",
+    "label": "長期移動平均の日数",
+    "kind": "integer",
+    "default": 25.0,
+    "minimum": 1.0,
+    "maximum": 1000.0,
+    "exclusive_maximum": false,
+    "step": 1.0,
+    "help": "直近何営業日の終値で長期線を作るか。1000日まで"
+  },
+  {
+    "key": "fee_rate_pct",
+    "label": "手数料率",
+    "kind": "percent",
+    "default": 0.1,
+    "minimum": 0.0,
+    "maximum": 10.0,
+    "exclusive_maximum": true,
+    "step": 0.01,
+    "help": "約定代金に対する割合。売りと買いの両方にかかる"
+  },
+  {
+    "key": "slippage_rate_pct",
+    "label": "スリッページ率",
+    "kind": "percent",
+    "default": 0.05,
+    "minimum": 0.0,
+    "maximum": 10.0,
+    "exclusive_maximum": true,
+    "step": 0.01,
+    "help": "始値からどれだけ不利な価格で約定するとみなすか。買いは高く、売りは安くなる"
+  },
+  {
+    "key": "initial_cash",
+    "label": "初期資金",
+    "kind": "yen",
+    "default": 1000000.0,
+    "minimum": 1.0,
+    "maximum": 1000000000.0,
+    "exclusive_maximum": false,
+    "step": 10000.0,
+    "help": "最初に持っている現金。1円以上、10億円以下"
+  }
+]
