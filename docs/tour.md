@@ -70,7 +70,7 @@ flowchart LR
 
 **`POST /api/backtests` の中(`run_backtest_endpoint`)**
 
-1. 戦略が使えるか → パラメータのチェック(`validate_params`。% → 割合に直す)→ エンジンを選ぶ(`get_engine`)
+1. 戦略が使えるか → 銘柄IDを読む(`SymbolId.parse`。市場ごとの設定もここで決まる)→ パラメータのチェック(`validate_params`。% → 割合に直す)→ エンジンを選ぶ(`get_engine`)
 2. 銘柄が対象か(`require_listed`。現在上場の銘柄だけ:仕様 3.6)→ 日足を読む(`service.load`)
 3. 期間のチェック(`validate_period`。データの範囲のチェックはここだけで行う)
 4. **銘柄の全期間の日足**をエンジンに渡す(`convert.to_engine_bars` → `run(...)`)。読み込む範囲の切り出しはエンジンの仕事
@@ -120,7 +120,7 @@ Python で書いた「正解」。遅くてよいので、仕様の文と1対1�
 | `tests/python/test_reference_*.py` | エンジンの手計算のケース、性質のテスト(未来のデータを書き換えても過去のシグナルが変わらない、など) | `uv run pytest` |
 | `tests/python/test_api.py` ほか | API・入力チェック・データ層・設定 | 同上 |
 | `tests/fixtures/` + `test_param_contract.py` | 画面と API で共有する表:パラメータの定義(`ma_cross_params.json`)と、入力 → メッセージ(`param_messages.json`)。画面のテスト(`lib/form.test.ts`)も同じ表を読むので、片方だけ変えるとどちらかが落ちる | 同上 |
-| `tests/golden/` + `test_golden.py` | 正解データ(60ケース)。リファレンスがビット単位で再現すること、C++ 版があれば一致すること | `make test-cpp` |
+| `tests/golden/` + `test_golden.py` | 正解データ(60ケース)。リファレンスがビット単位で再現すること(`make test` の pytest で動く)、C++ 版があれば一致すること(`make test-cpp`) | `make test`・`make test-cpp` |
 | `tests/cpp/` | C++ のビルド確認(C++ 版のテストは `engine/cpp/tests/` に自分で書く) | `ctest --test-dir build` |
 | `frontend/lib/*.test.ts` | 画面の状態遷移・入力チェック・目盛り・表示 | `npm --prefix frontend test` |
 | `frontend/e2e/` | 画面〜API〜エンジンを通しで(架空データ)。各手順でアクセシビリティの自動チェック | `make e2e` |
