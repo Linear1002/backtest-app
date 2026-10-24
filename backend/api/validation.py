@@ -19,8 +19,6 @@ from engine.reference import MaCrossParams
 
 MIN_BUSINESS_DAYS = 3
 
-SPECS: dict[str, ParamSpec] = {spec.key: spec for spec in MA_CROSS_PARAMS}
-
 
 class InputValidationError(Exception):
     def __init__(self, errors: list[ErrorItem]) -> None:
@@ -45,54 +43,56 @@ def _number_text(value: float) -> str:
     return f"{int(value)}" if float(value).is_integer() else f"{value}"
 
 
-def _check_window(key: str, value: float) -> str | None:
-    spec = SPECS[key]
-    if not _is_whole(value) or value < spec.minimum:
-        return f"日数は{_number_text(spec.minimum)}以上の整数で入力してください"
-    if spec.maximum is not None and value > spec.maximum:
-        return f"日数は{_number_text(spec.maximum)}以下で入力してください"
-    return None
+def _exceeded_maximum(spec: ParamSpec, value: float) -> float | None:
+    """上限を超えていれば、その上限を返す(上限がない・超えていないときは None)。"""
+    if spec.maximum is None:
+        return None
+    over = value >= spec.maximum if spec.exclusive_maximum else value > spec.maximum
+    return spec.maximum if over else None
 
 
-def _check_rate(key: str, value: float) -> str | None:
-    spec = SPECS[key]
-    if not math.isfinite(value) or value < spec.minimum:
-        return f"手数料率とスリッページ率は{_number_text(spec.minimum)}以上で入力してください"
-    if spec.maximum is not None and (
-        value >= spec.maximum if spec.exclusive_maximum else value > spec.maximum
-    ):
-        return f"手数料率とスリッページ率は{_number_text(spec.maximum)}%未満で入力してください"
-    return None
+def check_param(spec: ParamSpec, value: float) -> str | None:
+    """1つのパラメータを ParamSpec の範囲で確かめる。誤りがあればメッセージ(仕様 4.3 の文)を返す。
 
-
-def _check_cash(value: float) -> str | None:
-    spec = SPECS["initial_cash"]
-    if not math.isfinite(value) or value < spec.minimum:
-        return f"初期資金は{_number_text(spec.minimum)}円以上で入力してください"
-    if spec.maximum is not None and value > spec.maximum:
-        return f"初期資金は{_number_text(spec.maximum)}円以下で入力してください"
-    return None
+    画面の入力チェック(frontend/lib/form.ts の checkSpec)と、同じ判定・同じ文にする。
+    両方が同じ答えを返すことは tests/fixtures/param_messages.json で確かめている。
+    """
+    maximum = _exceeded_maximum(spec, value)
+    if spec.kind == "integer":
+        if not _is_whole(value) or value < spec.minimum:
+            return f"日数は{_number_text(spec.minimum)}以上の整数で入力してください"
+        if maximum is not None:
+            return f"日数は{_number_text(maximum)}以下で入力してください"
+        return None
+    if spec.kind == "percent":
+        if not math.isfinite(value) or value < spec.minimum:
+            return f"手数料率とスリッページ率は{_number_text(spec.minimum)}以上で入力してください"
+        if maximum is not None:
+            bound = "未満" if spec.exclusive_maximum else "以下"
+            return f"手数料率とスリッページ率は{_number_text(maximum)}%{bound}で入力してください"
+        return None
+    if spec.kind == "yen":
+        if not math.isfinite(value) or value < spec.minimum:
+            return f"初期資金は{_number_text(spec.minimum)}円以上で入力してください"
+        if maximum is not None:
+            return f"初期資金は{_number_text(maximum)}円以下で入力してください"
+        return None
+    raise ValueError(f"知らないパラメータの種類です: {spec.kind}")
 
 
 def validate_params(raw: MaCrossParamsIn, market: MarketConfig) -> MaCrossParams:
     errors: list[ErrorItem] = []
-    windows_ok = True
-    for key in ("short_window", "long_window"):
-        message = _check_window(key, getattr(raw, key))
+    for spec in MA_CROSS_PARAMS:
+        message = check_param(spec, getattr(raw, spec.key))
         if message:
-            errors.append(ErrorItem(field=key, message=message))
-            windows_ok = False
+            errors.append(ErrorItem(field=spec.key, message=message))
+    windows_ok = not any(e.field in ("short_window", "long_window") for e in errors)
     if windows_ok and raw.short_window >= raw.long_window:
-        errors.append(
-            ErrorItem(field="short_window", message="短期の日数は長期の日数より小さくしてください")
+        # 移動平均クロスだけの決まり。画面と同じく、短期の欄に出す
+        errors.insert(
+            0,
+            ErrorItem(field="short_window", message="短期の日数は長期の日数より小さくしてください"),
         )
-    for key in ("fee_rate_pct", "slippage_rate_pct"):
-        message = _check_rate(key, getattr(raw, key))
-        if message:
-            errors.append(ErrorItem(field=key, message=message))
-    message = _check_cash(raw.initial_cash)
-    if message:
-        errors.append(ErrorItem(field="initial_cash", message=message))
     if errors:
         raise InputValidationError(errors)
     return MaCrossParams(
