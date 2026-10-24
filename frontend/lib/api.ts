@@ -23,9 +23,13 @@ export type DataSource = {
 
 export type EngineInfo = { id: string; label: string; available: boolean; note: string };
 
+/** 総当たりに使うエンジン(docs/sweep.md)。max_pairs は計算できる組み合わせの数の上限 */
+export type SweepEngineInfo = EngineInfo & { max_pairs: number };
+
 export type Meta = {
   data_sources: DataSource[];
   engines: EngineInfo[];
+  sweep_engines: SweepEngineInfo[];
   trading_days_per_year: number;
 };
 
@@ -159,7 +163,10 @@ export type NoteKind =
   | "insufficient_cash"
   | "execution_assumption"
   | "data_license"
-  | "stale_data";
+  | "stale_data"
+  | "trials"
+  | "selection_bias"
+  | "no_holdout";
 
 export type BacktestResult = {
   symbol: SymbolSummary;
@@ -221,6 +228,102 @@ export type BacktestResult = {
   corporate_actions: CorporateAction[];
   data_info: DataInfo;
   elapsed_ms: number;
+};
+
+// --- 総当たり(docs/sweep.md。backend/api/schemas.py の Sweep*) ----------------------------
+
+export type SweepGridKey = "short_min" | "short_max" | "short_step" | "long_min" | "long_max" | "long_step";
+export type SweepGrid = Record<SweepGridKey, number>;
+export type CostKey = "fee_rate_pct" | "slippage_rate_pct" | "initial_cash";
+
+export type SweepRequest = {
+  symbol_id: string;
+  strategy_id: string;
+  engine: string;
+  start_date: string;
+  end_date: string;
+  /** 検証期間(アウトオブサンプル)の開始日。null は検証期間なし */
+  holdout_start_date: string | null;
+  grid: SweepGrid;
+  params: Record<CostKey, number>;
+};
+
+export type SegmentName = "in_sample" | "out_of_sample";
+
+export type SweepSegment = {
+  name: SegmentName;
+  start_date: string;
+  end_date: string;
+  first_business_day: string;
+  last_business_day: string;
+  business_days: number;
+};
+
+export type SweepMetrics = {
+  total_return: number;
+  annualized_return: number | null;
+  max_drawdown: number;
+  sharpe_ratio: number | null;
+  win_rate: number | null;
+  trade_count: number;
+  winning_trades: number;
+  return_count: number;
+  insufficient_cash_count: number;
+  final_equity: number;
+};
+
+export type SweepCombo = {
+  short_window: number;
+  long_window: number;
+  in_sample: SweepMetrics;
+  out_of_sample: SweepMetrics | null;
+};
+
+export type Objective = "sharpe_ratio" | "total_return" | "max_drawdown";
+
+/** 1つの基準で並べた結果(docs/sweep.md 7章)。位置は combos の中の位置 */
+export type SweepRanking = {
+  objective: Objective;
+  order: number[];
+  best_index: number | null;
+  best_out_of_sample_rank: number | null;
+  out_of_sample_ranked: number;
+  rank_correlation: number | null;
+  correlation_pairs: number;
+  neighbors_mean: number | null;
+  neighbors_count: number;
+};
+
+export type SweepResult = {
+  symbol: SymbolSummary;
+  strategy_id: string;
+  engine: SweepEngineInfo;
+  segments: SweepSegment[];
+  grid: SweepGrid & { short_values: number[]; long_values: number[] };
+  params: {
+    fee_rate_pct: number;
+    slippage_rate_pct: number;
+    fee_rate: number;
+    slippage_rate: number;
+    initial_cash: number;
+    lot_size: number;
+    trading_days_per_year: number;
+  };
+  count: number;
+  combos: SweepCombo[];
+  rankings: SweepRanking[];
+  notes: { kind: NoteKind; message: string }[];
+  data_info: DataInfo;
+};
+
+export type SweepStatus = {
+  id: string;
+  status: "running" | "done" | "failed" | "cancelled";
+  done: number;
+  total: number;
+  elapsed_ms: number | null;
+  result: SweepResult | null;
+  error: { detail: string; errors: ErrorItem[] } | null;
 };
 
 export class ApiError extends Error {
@@ -303,6 +406,11 @@ export function createApi(fetchImpl: Fetch = (input, init) => fetch(input, init)
     symbol: (id: string) => request<SymbolDetail>(`/api/symbols/${encodeURIComponent(id)}`),
     runBacktest: (body: BacktestRequest) =>
       request<BacktestResult>("/api/backtests", { method: "POST", body: JSON.stringify(body) }),
+    startSweep: (body: SweepRequest) =>
+      request<SweepStatus>("/api/sweeps", { method: "POST", body: JSON.stringify(body) }),
+    sweepStatus: (id: string) => request<SweepStatus>(`/api/sweeps/${encodeURIComponent(id)}`),
+    cancelSweep: (id: string) =>
+      request<SweepStatus>(`/api/sweeps/${encodeURIComponent(id)}`, { method: "DELETE" }),
   };
 }
 

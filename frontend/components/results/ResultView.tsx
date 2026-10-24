@@ -36,6 +36,7 @@ export function ResultView({
   onAnimated,
   onEditParams,
   onRestart,
+  onBackToSweep = null,
 }: {
   record: RunRecord;
   /** 結果が出たときの動きを再生するか(同じ結果に戻ってきたときは再生しない) */
@@ -43,6 +44,8 @@ export function ResultView({
   onAnimated: (id: number) => void;
   onEditParams: () => void;
   onRestart: () => void;
+  /** 同じ条件の総当たりの結果があれば、そこへ戻る */
+  onBackToSweep?: (() => void) | null;
 }) {
   const headingId = useId();
   const result = record.result;
@@ -58,7 +61,13 @@ export function ResultView({
 
   return (
     <article aria-labelledby={headingId} className="space-y-10">
-      <Statement result={result} headingId={headingId} onEditParams={onEditParams} onRestart={onRestart} />
+      <Statement
+        result={result}
+        headingId={headingId}
+        onEditParams={onEditParams}
+        onRestart={onRestart}
+        onBackToSweep={onBackToSweep}
+      />
       <Metrics result={result} />
       <section aria-label="チャート" className="rounded-md border border-rule bg-surface p-3 sm:p-5">
         <TimeSeriesCharts result={result} actions={actions} animate={animate} />
@@ -78,11 +87,13 @@ function Statement({
   headingId,
   onEditParams,
   onRestart,
+  onBackToSweep,
 }: {
   result: BacktestResult;
   headingId: string;
   onEditParams: () => void;
   onRestart: () => void;
+  onBackToSweep: (() => void) | null;
 }) {
   const m = result.metrics;
   const tone = TONE[direction(m.profit)];
@@ -131,6 +142,7 @@ function Statement({
         </div>
       </div>
       <div className="flex flex-wrap gap-2 lg:justify-end">
+        {onBackToSweep && <SecondaryButton onClick={onBackToSweep}>総当たりの結果に戻る</SecondaryButton>}
         <SecondaryButton onClick={onEditParams}>条件を変えて試す</SecondaryButton>
         <SecondaryButton onClick={onRestart}>別の銘柄で試す</SecondaryButton>
       </div>

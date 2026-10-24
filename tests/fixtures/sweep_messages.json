@@ -1,0 +1,190 @@
+{
+  "_説明": "総当たりの格子の入力 → 誤りのメッセージ・組み合わせの数 の表。画面(frontend/lib/sweep.test.ts の parseSweepGrid)と API(tests/python/test_param_contract.py の validate_sweep_inputs)の両方がこの表を読む。grid は既定値(短期3〜30・刻み3、長期20〜120・刻み10)からの変更。errors が空なら誤りなしで、pairs はそのときの組み合わせの数。組み合わせの上限は max_pairs(Python リファレンス実装と同じ2,000)。frontend_only は、画面の入力欄だけで起きる文字の形(API には数値として届く)。",
+  "max_pairs": 2000,
+  "cases": [
+    {
+      "grid": {},
+      "errors": {},
+      "pairs": 105,
+      "frontend_only": false
+    },
+    {
+      "grid": {
+        "short_min": "0"
+      },
+      "errors": {
+        "short_min": "日数と刻みは1以上の整数で入力してください"
+      },
+      "pairs": null,
+      "frontend_only": false
+    },
+    {
+      "grid": {
+        "short_step": "2.5"
+      },
+      "errors": {
+        "short_step": "日数と刻みは1以上の整数で入力してください"
+      },
+      "pairs": null,
+      "frontend_only": false
+    },
+    {
+      "grid": {
+        "long_max": "1001"
+      },
+      "errors": {
+        "long_max": "日数と刻みは1000以下で入力してください"
+      },
+      "pairs": null,
+      "frontend_only": false
+    },
+    {
+      "grid": {
+        "short_min": "20",
+        "short_max": "10"
+      },
+      "errors": {
+        "short_min": "短期の日数の範囲は、最小を最大以下にしてください"
+      },
+      "pairs": null,
+      "frontend_only": false
+    },
+    {
+      "grid": {
+        "long_min": "50",
+        "long_max": "40"
+      },
+      "errors": {
+        "long_min": "長期の日数の範囲は、最小を最大以下にしてください"
+      },
+      "pairs": null,
+      "frontend_only": false
+    },
+    {
+      "grid": {
+        "short_min": "20",
+        "short_max": "10",
+        "long_min": "50",
+        "long_max": "40"
+      },
+      "errors": {
+        "short_min": "短期の日数の範囲は、最小を最大以下にしてください",
+        "long_min": "長期の日数の範囲は、最小を最大以下にしてください"
+      },
+      "pairs": null,
+      "frontend_only": false
+    },
+    {
+      "grid": {
+        "short_min": "0",
+        "long_max": "1001"
+      },
+      "errors": {
+        "short_min": "日数と刻みは1以上の整数で入力してください",
+        "long_max": "日数と刻みは1000以下で入力してください"
+      },
+      "pairs": null,
+      "frontend_only": false
+    },
+    {
+      "grid": {
+        "short_min": "50",
+        "short_max": "60",
+        "long_min": "10",
+        "long_max": "40"
+      },
+      "errors": {
+        "grid": "短期の日数が長期の日数より小さい組み合わせがありません。範囲を見直してください"
+      },
+      "pairs": null,
+      "frontend_only": false
+    },
+    {
+      "grid": {
+        "short_min": "1",
+        "short_max": "100",
+        "short_step": "1",
+        "long_min": "2",
+        "long_max": "200",
+        "long_step": "1"
+      },
+      "errors": {
+        "grid": "組み合わせが多すぎます(14,950通り)。このエンジンでは2,000通りまでです。範囲を狭めるか、刻みを大きくしてください"
+      },
+      "pairs": null,
+      "frontend_only": false
+    },
+    {
+      "grid": {
+        "short_min": "1",
+        "short_max": "20",
+        "short_step": "1",
+        "long_min": "21",
+        "long_max": "120",
+        "long_step": "1"
+      },
+      "errors": {},
+      "pairs": 2000,
+      "frontend_only": false
+    },
+    {
+      "grid": {
+        "short_min": "1",
+        "short_max": "20",
+        "short_step": "1",
+        "long_min": "21",
+        "long_max": "121",
+        "long_step": "1"
+      },
+      "errors": {
+        "grid": "組み合わせが多すぎます(2,020通り)。このエンジンでは2,000通りまでです。範囲を狭めるか、刻みを大きくしてください"
+      },
+      "pairs": null,
+      "frontend_only": false
+    },
+    {
+      "grid": {
+        "long_max": "1000"
+      },
+      "errors": {},
+      "pairs": 985,
+      "frontend_only": false
+    },
+    {
+      "grid": {
+        "short_step": "1000"
+      },
+      "errors": {},
+      "pairs": 11,
+      "frontend_only": false
+    },
+    {
+      "grid": {
+        "short_min": "abc"
+      },
+      "errors": {
+        "short_min": "数値で入力してください"
+      },
+      "pairs": null,
+      "frontend_only": true
+    },
+    {
+      "grid": {
+        "long_step": ""
+      },
+      "errors": {
+        "long_step": "数値で入力してください"
+      },
+      "pairs": null,
+      "frontend_only": true
+    },
+    {
+      "grid": {
+        "short_max": "３０"
+      },
+      "errors": {},
+      "pairs": 105,
+      "frontend_only": true
+    }
+  ]
+}

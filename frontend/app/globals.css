@@ -49,6 +49,8 @@
   --ma-long: #0f8b74;
   --price: #4a5362;
   --seal-ink: #ffffff;
+  /* ヒートマップの中立の色(値が0)。紙・面と見分けられるグレー。プラスは朱、マイナスは藍と OKLab で混ぜる */
+  --heat-mid: #e3e7e3;
   color-scheme: light;
 }
 
@@ -71,6 +73,7 @@
     --ma-long: #24a084;
     --price: #b5bdc9;
     --seal-ink: #171b22;
+    --heat-mid: #2e343e;
     color-scheme: dark;
   }
 }
@@ -189,4 +192,23 @@ h3 {
     opacity: 1;
     transform: scale(1);
   }
+}
+
+/* 総当たりのヒートマップのマス。選んだマスは墨の枠で囲む(藍のマスの上でも見えるように、フォーカスの枠も墨にする) */
+.heat-cell {
+  position: relative;
+  outline: none;
+}
+.heat-cell:hover {
+  box-shadow: inset 0 0 0 1px var(--ink-2);
+}
+.heat-cell[data-best="true"] {
+  box-shadow: inset 0 0 0 2px var(--ink);
+}
+.heat-cell[aria-selected="true"],
+.heat-cell:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+  z-index: 1;
+  border-radius: 0;
 }
