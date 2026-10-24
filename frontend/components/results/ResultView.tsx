@@ -1,14 +1,18 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 
-import type { BacktestResult, SymbolDetail, Trade } from "@/lib/api.ts";
+import type { BacktestResult, Trade } from "@/lib/api.ts";
+import type { RunRecord } from "@/lib/flow.ts";
 import {
   direction,
   formatDate,
+  formatDateTimeJst,
+  formatDecimal,
   formatNumber,
   formatPercent,
   formatPrice,
+  formatRatePct,
   formatShares,
   formatSignedYen,
   formatYen,
@@ -20,24 +24,34 @@ import { TimeSeriesCharts } from "./TimeSeriesCharts.tsx";
 
 const TONE = { up: "text-shu", down: "text-ai", flat: "text-ink" } as const;
 
+/** 結果が出たときの動き(線を描く・印を押す)が終わるまでの時間。終わったら「再生済み」にする */
+const ANIMATION_MS = 1600;
+
 export function ResultView({
-  result,
-  detail,
+  record,
   animate,
+  onAnimated,
   onEditParams,
   onRestart,
 }: {
-  result: BacktestResult;
-  detail: SymbolDetail | null;
+  record: RunRecord;
+  /** 結果が出たときの動きを再生するか(同じ結果に戻ってきたときは再生しない) */
   animate: boolean;
+  onAnimated: (id: number) => void;
   onEditParams: () => void;
   onRestart: () => void;
 }) {
   const headingId = useId();
-  const actions =
-    detail?.corporate_actions.filter(
-      (a) => a.date >= result.period.first_business_day && a.date <= result.period.last_business_day,
-    ) ?? [];
+  const result = record.result;
+  // 権利落ちは、この結果と一緒に返ってきたもの(期間内・株を持っていない日も含む)を使う。
+  // 係数が1の日は、何も起きていないので描かない
+  const actions = result.corporate_actions.filter((a) => a.adj_factor !== 1);
+
+  useEffect(() => {
+    if (!animate) return;
+    const timer = setTimeout(() => onAnimated(record.id), ANIMATION_MS);
+    return () => clearTimeout(timer);
+  }, [animate, onAnimated, record.id]);
 
   return (
     <article aria-labelledby={headingId} className="space-y-10">
@@ -83,6 +97,10 @@ function Statement({
           </span>
           ({result.period.business_days.toLocaleString("ja-JP")}営業日)
         </p>
+        <p className="mt-0.5 text-[13px] text-ink-3">
+          手数料率 {formatRatePct(result.params.fee_rate_pct)}・スリッページ率 {formatRatePct(result.params.slippage_rate_pct)}
+          ・売買単位 {result.params.lot_size}株
+        </p>
         <div className="mt-5 max-w-[34rem]">
           <div className="flex items-baseline justify-between gap-6 border-b border-rule py-2">
             <span className="text-[14px] text-ink-2">初期資金</span>
@@ -113,8 +131,10 @@ function Statement({
 // --- 成績表 -----------------------------------------------------------------------
 
 function Metrics({ result }: { result: BacktestResult }) {
+  const headingId = useId();
   const m = result.metrics;
-  const reference = result.notes.some((n) => n.kind === "annualized_reference");
+  // 値が出せないとき(算出不可)は「参考値」を付けない
+  const reference = m.annualized_return !== null && result.notes.some((n) => n.kind === "annualized_reference");
   const losses = m.trade_count - m.winning_trades;
   const rows: { label: string; value: React.ReactNode; help: string }[] = [
     {
@@ -132,7 +152,7 @@ function Metrics({ result }: { result: BacktestResult }) {
           {reference && <span className="ml-2 text-[12px] font-normal text-ink-3">参考値</span>}
         </>
       ),
-      help: "1年(245営業日)あたりに直した値",
+      help: `1年(${result.params.trading_days_per_year}営業日)あたりに直した値`,
     },
     {
       label: "最大ドローダウン",
@@ -166,8 +186,8 @@ function Metrics({ result }: { result: BacktestResult }) {
     },
   ];
   return (
-    <section aria-labelledby="metrics-heading">
-      <h3 id="metrics-heading" className="text-[18px] font-bold text-ink">
+    <section aria-labelledby={headingId}>
+      <h3 id={headingId} className="text-[18px] font-bold text-ink">
         成績表
       </h3>
       <dl className="mt-3 grid border-t border-rule sm:grid-cols-2">
@@ -183,7 +203,7 @@ function Metrics({ result }: { result: BacktestResult }) {
       </dl>
       <p className="mt-3 text-[13px] leading-6 text-ink-3">
         {result.warmup.label}。計算:{result.engine.label}({result.elapsed_ms.toFixed(0)}ミリ秒)。データ:{result.data_info.source_label}
-        {result.data_info.fetched_at ? `(${formatDate(result.data_info.fetched_at.slice(0, 10))} 取得)` : ""}
+        {result.data_info.fetched_at ? `(${formatDateTimeJst(result.data_info.fetched_at)} 取得・日本時間)` : ""}
       </p>
     </section>
   );
@@ -239,21 +259,31 @@ function DailyTable({ result }: { result: BacktestResult }) {
 
 // --- 取引の記録(帳簿) --------------------------------------------------------------
 
+/** 取引が0件のときの説明。なぜ0件なのかと、次に何をすればよいかを書く。 */
+function emptyTradesMessage(result: BacktestResult): string {
+  if (result.insufficient_cash_count > 0) {
+    return "買いのシグナルは出ましたが、資金が売買単位分に足りなかったため、一度も買っていません。初期資金を増やして試してください。";
+  }
+  if (result.signals.some((s) => s.side === "buy" && s.action === "order")) {
+    // シグナルの次の有効日に約定するので、期間の最終日のシグナルは約定しない(docs/mvp.md 2.6)
+    return "買いのシグナルは出ましたが、期間の最後の日(またはその後に売買が成立しなかった日)だったため約定していません。終了日を後ろにずらして試してください。";
+  }
+  return "この期間には、買いのシグナルが出ませんでした。期間を広げるか、移動平均の日数を変えて試してください。";
+}
+
 function TradeLedger({ result }: { result: BacktestResult }) {
+  const headingId = useId();
   const trades = result.trades;
   const closed = trades.filter((t) => t.pnl !== null);
   const total = closed.reduce((sum, t) => sum + (t.pnl ?? 0), 0);
+  const acrossSplit = trades.some(changedShares);
   return (
-    <section aria-labelledby="trades-heading">
-      <h3 id="trades-heading" className="text-[18px] font-bold text-ink">
+    <section aria-labelledby={headingId}>
+      <h3 id={headingId} className="text-[18px] font-bold text-ink">
         取引の記録
       </h3>
       {trades.length === 0 ? (
-        <p className="mt-3 text-[14px] text-ink-2">
-          {result.insufficient_cash_count > 0
-            ? "買いのシグナルは出ましたが、資金が売買単位分に足りなかったため、一度も買っていません。初期資金を増やして試してください。"
-            : "この期間には、買いのシグナルが出ませんでした。期間を広げるか、移動平均の日数を変えて試してください。"}
-        </p>
+        <p className="mt-3 text-[14px] text-ink-2">{emptyTradesMessage(result)}</p>
       ) : (
         <>
         <TradeList trades={trades} total={total} closedCount={closed.length} />
@@ -287,10 +317,26 @@ function TradeLedger({ result }: { result: BacktestResult }) {
             </tfoot>
           </table>
         </div>
+        {acrossSplit && (
+          <p className="mt-2 text-[13px] leading-6 text-ink-3">
+            ※ 分割・併合をまたいだ取引は、株数を「買った株数 → 売った株数」で示しています。売値は分割・併合の後の株価です。
+          </p>
+        )}
         </>
       )}
     </section>
   );
+}
+
+/** 分割・併合で、買ったときと売ったときの株数が違う取引か。 */
+function changedShares(t: Trade): boolean {
+  return t.exit_shares !== null && t.exit_shares !== t.entry_shares;
+}
+
+function sharesText(t: Trade): string {
+  return changedShares(t)
+    ? `${formatShares(t.entry_shares)} → ${formatShares(t.exit_shares ?? 0)}`
+    : formatShares(t.entry_shares);
 }
 
 /** 画面が狭いときの取引の記録(1取引を2行で書く)。 */
@@ -308,7 +354,7 @@ function TradeList({ trades, total, closedCount }: { trades: Trade[]; total: num
                   {formatDate(t.entry_date)}
                 </span>
                 <span className="text-ink-2">
-                  {formatPrice(t.entry_price)} × {formatShares(t.entry_shares)}
+                  {formatPrice(t.entry_price)} × {sharesText(t)}
                 </span>
               </div>
               <div className="mt-1 flex items-center justify-between gap-3">
@@ -352,7 +398,7 @@ function TradeRow({ trade: t }: { trade: Trade }) {
         </span>
       </td>
       <td className="px-3 py-2 text-right">{formatPrice(t.entry_price)}</td>
-      <td className="px-3 py-2 text-right">{formatShares(t.entry_shares)}</td>
+      <td className="px-3 py-2 text-right">{sharesText(t)}</td>
       <td className="px-3 py-2 text-left">
         {t.exit_date ? (
           <span className="inline-flex items-center gap-2">
@@ -375,13 +421,20 @@ function TradeRow({ trade: t }: { trade: Trade }) {
 // --- シグナル・見送り・分割の処理 -------------------------------------------------
 
 function Activity({ result }: { result: BacktestResult }) {
+  const headingId = useId();
   const ignored = result.signals.filter((s) => s.action === "ignored").length;
   return (
-    <section aria-labelledby="activity-heading" className="grid gap-8 lg:grid-cols-2">
+    <section aria-labelledby={headingId} className="grid gap-8 lg:grid-cols-2">
       <div>
-        <h3 id="activity-heading" className="text-[18px] font-bold text-ink">
+        <h3 id={headingId} className="text-[18px] font-bold text-ink">
           シグナルの記録
         </h3>
+        {result.signals.length === 0 ? (
+          <p className="mt-1 text-[14px] leading-7 text-ink-2">
+            この期間には、短期線と長期線のクロスが一度もありませんでした。期間を広げるか、移動平均の日数を短くして試してください。
+          </p>
+        ) : (
+        <>
         <p className="mt-1 text-[13px] leading-6 text-ink-3">
           クロスを {result.signals.length} 回検出し、そのうち {ignored} 回は売買ルールにより見送りました
           (保有中の上抜け・未保有の下抜け)。
@@ -400,6 +453,8 @@ function Activity({ result }: { result: BacktestResult }) {
             ))}
           </ul>
         </details>
+        </>
+        )}
       </div>
       <div className="space-y-6">
         {result.events.length > 0 && (
@@ -414,7 +469,7 @@ function Activity({ result }: { result: BacktestResult }) {
                   </span>
                   {e.fraction_shares > 0 && (
                     <span className="block text-[13px] text-ink-3">
-                      1株未満の端数 {e.fraction_shares} 株を {formatYen(e.fraction_cash)} の現金に換えました
+                      1株未満の端数 {formatDecimal(e.fraction_shares)} 株を {formatYen(e.fraction_cash)} の現金に換えました
                       {e.closed_position ? "(0株になったので、この日に決済)" : ""}
                     </span>
                   )}
@@ -446,9 +501,10 @@ function Activity({ result }: { result: BacktestResult }) {
 // --- 注記 ---------------------------------------------------------------------------
 
 function Notes({ result }: { result: BacktestResult }) {
+  const headingId = useId();
   return (
-    <section aria-labelledby="notes-heading" className="border-t border-rule pt-6">
-      <h3 id="notes-heading" className="text-[16px] font-bold text-ink">
+    <section aria-labelledby={headingId} className="border-t border-rule pt-6">
+      <h3 id={headingId} className="text-[16px] font-bold text-ink">
         この結果を読むときの注意
       </h3>
       <ul className="mt-2 space-y-1.5 text-[14px] leading-7 text-ink-2">

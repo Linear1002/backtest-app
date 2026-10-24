@@ -5,24 +5,23 @@ type SealProps = {
   size?: number;
   outline?: boolean;
   title?: string;
+  /** 飾りとして置く(読み上げない)。見出しやボタンの文字と同じ意味のときに使う */
+  decorative?: boolean;
 };
 
 const CHAR = { buy: "買", sell: "売", check: "検" } as const;
 const LABEL = { buy: "買い", sell: "売り", check: "検" } as const;
 
-export function Seal({ kind, size = 22, outline = false, title }: SealProps) {
+export function Seal({ kind, size = 22, outline = false, title, decorative = false }: SealProps) {
   const className = [
     "seal",
     outline ? "seal-outline" : kind === "sell" ? "seal-sell" : "seal-buy",
   ].join(" ");
+  const a11y = decorative
+    ? { "aria-hidden": true as const }
+    : { role: "img" as const, "aria-label": title ?? LABEL[kind], title };
   return (
-    <span
-      className={className}
-      style={{ width: size, height: size, fontSize: Math.round(size * 0.58) }}
-      role="img"
-      aria-label={title ?? LABEL[kind]}
-      title={title}
-    >
+    <span className={className} style={{ width: size, height: size, fontSize: Math.round(size * 0.58) }} {...a11y}>
       <span aria-hidden="true">{CHAR[kind]}</span>
     </span>
   );

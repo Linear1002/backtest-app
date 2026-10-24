@@ -39,6 +39,8 @@
   --ink-3: #636c7a;
   --rule: #dfe5ea;
   --rule-strong: #b8c4ce;
+  /* 入力欄の枠。紙・面のどちらに対しても 3:1 以上(WCAG 2.1 の 1.4.11) */
+  --field: #838e9a;
   --shu: #c23b2e;
   --ai: #2c5aa0;
   --shu-wash: rgb(194 59 46 / 0.08);
@@ -60,6 +62,7 @@
     --ink-3: #8d97a6;
     --rule: #2a313c;
     --rule-strong: #3d4653;
+    --field: #646e7d;
     --shu: #de6457;
     --ai: #5f8dd8;
     --shu-wash: rgb(222 100 87 / 0.12);
@@ -81,6 +84,7 @@
   --color-ink-3: var(--ink-3);
   --color-rule: var(--rule);
   --color-rule-strong: var(--rule-strong);
+  --color-field: var(--field);
   --color-shu: var(--shu);
   --color-ai: var(--ai);
   --color-shu-wash: var(--shu-wash);

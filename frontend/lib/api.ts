@@ -7,7 +7,10 @@ export type DataInfo = {
   source_id: string;
   source_label: string;
   license_note: string;
+  /** データを取得した日時(UTC。架空データは null) */
   fetched_at: string | null;
+  /** 最新のデータを取得できず、保存済みの古いデータを使ったときの説明 */
+  warning: string | null;
 };
 
 export type DataSource = {
@@ -38,11 +41,20 @@ export type SymbolSummary = {
   description: string | null;
 };
 
+export type CorporateAction = {
+  date: string;
+  ex_rt: number | null;
+  label: string;
+  adj_factor: number;
+  /** 持ち株数が変わる日か(分割・併合で、調整係数が1でない日。docs/mvp.md 2.8) */
+  changes_shares: boolean;
+};
+
 export type SymbolDetail = {
   symbol: SymbolSummary;
-  market: { code: string; name: string; currency: string; lot_size: number };
+  market: { code: string; name: string; currency: string; lot_size: number; trading_days_per_year: number };
   range: { first_date: string; last_date: string; business_days: number; trading_days: number };
-  corporate_actions: { date: string; ex_rt: number | null; label: string; adj_factor: number }[];
+  corporate_actions: CorporateAction[];
   halted_days: number;
   data_info: DataInfo;
 };
@@ -146,7 +158,8 @@ export type NoteKind =
   | "warmup_shortage"
   | "insufficient_cash"
   | "execution_assumption"
-  | "data_license";
+  | "data_license"
+  | "stale_data";
 
 export type BacktestResult = {
   symbol: SymbolSummary;
@@ -169,6 +182,7 @@ export type BacktestResult = {
     slippage_rate: number;
     initial_cash: number;
     lot_size: number;
+    trading_days_per_year: number;
   };
   metrics: {
     total_return: number;
@@ -203,6 +217,8 @@ export type BacktestResult = {
   }[];
   events: CorporateActionEvent[];
   trades: Trade[];
+  /** 期間内の権利落ち(株を持っていない日も含む)。チャートの線を切る位置などに使う */
+  corporate_actions: CorporateAction[];
   data_info: DataInfo;
   elapsed_ms: number;
 };
@@ -226,46 +242,74 @@ export class ApiError extends Error {
   }
 }
 
-const UNREACHABLE =
+export const UNREACHABLE =
   "API サーバーに接続できません。ターミナルで make dev-api を実行してから、もう一度試してください";
+const UNREADABLE = "サーバーの応答を読み取れませんでした。ページを再読み込みしても直らないときは、API サーバーのターミナルを確認してください";
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  let response: Response;
-  try {
-    response = await fetch(path, {
-      ...init,
-      headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-    });
-  } catch {
-    throw new ApiError(0, UNREACHABLE);
-  }
-  if (response.status === 502 || response.status === 504) {
-    // rewrites 先(FastAPI)が起動していないとき
-    throw new ApiError(response.status, UNREACHABLE);
-  }
-  const text = await response.text();
-  let body: unknown = null;
-  try {
-    body = text ? JSON.parse(text) : null;
-  } catch {
-    throw new ApiError(response.status, response.ok ? "応答を読み取れませんでした" : UNREACHABLE);
-  }
-  if (!response.ok) {
-    const b = (body ?? {}) as { detail?: unknown; errors?: ErrorItem[] };
-    const detail = typeof b.detail === "string" ? b.detail : `エラーが発生しました(HTTP ${response.status})`;
-    throw new ApiError(response.status, detail, Array.isArray(b.errors) ? b.errors : []);
-  }
-  return body as T;
+/** 応答の本文が JSON でないとき、状態コードから起きたことを推測して日本語にする。 */
+function nonJsonMessage(status: number): string {
+  // FastAPI は、想定外の例外も含めて必ず JSON で返す(backend/api/errors.py)。
+  // JSON でない 500 / 502 / 503 / 504 は、Next.js の中継(rewrites)が API サーバーにつながらなかったとき。
+  // Next.js は転送先につながらないと、本文が「Internal Server Error」の 500 を返す。
+  if (status >= 500) return UNREACHABLE;
+  if (status >= 200 && status < 300) return UNREADABLE;
+  return `エラーが発生しました(HTTP ${status})。ページを再読み込みしても直らないときは、API サーバーのターミナルを確認してください`;
 }
 
-export const api = {
-  meta: () => request<Meta>("/api/meta"),
-  strategies: () => request<{ items: Strategy[] }>("/api/strategies").then((r) => r.items),
-  searchSymbols: (q: string, limit = 20) =>
-    request<{ items: SymbolSummary[] }>(
-      `/api/symbols?q=${encodeURIComponent(q)}&limit=${limit}`,
-    ).then((r) => r.items),
-  symbol: (id: string) => request<SymbolDetail>(`/api/symbols/${encodeURIComponent(id)}`),
-  runBacktest: (body: BacktestRequest) =>
-    request<BacktestResult>("/api/backtests", { method: "POST", body: JSON.stringify(body) }),
-};
+type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
+
+/**
+ * API の呼び出し口を作る。テストでは fetch を差し替える(lib/api.test.ts)。
+ * 失敗はすべて ApiError(日本語のメッセージ付き)にして投げる。
+ */
+export function createApi(fetchImpl: Fetch = (input, init) => fetch(input, init)) {
+  async function request<T>(path: string, init?: RequestInit): Promise<T> {
+    let response: Response;
+    try {
+      response = await fetchImpl(path, {
+        ...init,
+        headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+      });
+    } catch {
+      // ネットワークの失敗(画面の開発サーバーも止まっている、など)
+      throw new ApiError(0, UNREACHABLE);
+    }
+    const text = await response.text();
+    let body: unknown = null;
+    try {
+      body = text ? JSON.parse(text) : null;
+    } catch {
+      throw new ApiError(response.status, nonJsonMessage(response.status));
+    }
+    if (!response.ok) {
+      const b = (body ?? {}) as { detail?: unknown; errors?: unknown };
+      const detail =
+        typeof b.detail === "string"
+          ? b.detail
+          : `エラーが発生しました(HTTP ${response.status})。API サーバーのターミナルを確認してください`;
+      const errors = Array.isArray(b.errors) ? (b.errors as ErrorItem[]) : [];
+      throw new ApiError(response.status, detail, errors);
+    }
+    return body as T;
+  }
+
+  return {
+    meta: () => request<Meta>("/api/meta"),
+    strategies: () => request<{ items: Strategy[] }>("/api/strategies").then((r) => r.items),
+    searchSymbols: (q: string, limit = 20) =>
+      request<{ items: SymbolSummary[] }>(`/api/symbols?q=${encodeURIComponent(q)}&limit=${limit}`).then(
+        (r) => r.items,
+      ),
+    symbol: (id: string) => request<SymbolDetail>(`/api/symbols/${encodeURIComponent(id)}`),
+    runBacktest: (body: BacktestRequest) =>
+      request<BacktestResult>("/api/backtests", { method: "POST", body: JSON.stringify(body) }),
+  };
+}
+
+export const api = createApi();
+
+/** エラーを画面に出す文にする(ApiError 以外は、次にすることを添えた予備の文)。 */
+export function errorMessage(error: unknown, fallback: string): string {
+  if (error instanceof ApiError) return error.message;
+  return `${fallback}。ページを再読み込みして、もう一度試してください`;
+}
