@@ -44,10 +44,14 @@ export function SecondaryButton({
   );
 }
 
+/**
+ * 入力欄の下に出す誤り。role="alert" にはしない:確認へ進もうとしたときは最初の誤りの欄にフォーカスが移り、
+ * aria-describedby でこの文が読み上げられる(全部の欄の誤りを一斉に読み上げると、かえって分かりにくいため)。
+ */
 export function FieldError({ id, message }: { id: string; message?: string }) {
   if (!message) return null;
   return (
-    <p id={id} className="mt-1 text-[13px] leading-6 text-shu" role="alert">
+    <p id={id} className="mt-1 text-[13px] leading-6 text-shu">
       {message}
     </p>
   );

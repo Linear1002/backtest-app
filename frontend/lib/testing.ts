@@ -1,15 +1,19 @@
 // テスト用の小さなデータ(画面のテストだけで使う。アプリからは import しない)。
-// 戦略のパラメータの定義は backend/strategies.py と同じ値にしてある。
+
+import { readFileSync } from "node:fs";
 
 import type { BacktestResult, Meta, ParamSpec, Strategy, SymbolDetail, SymbolSummary } from "./api.ts";
 
-export const SPECS: ParamSpec[] = [
-  { key: "short_window", label: "短期移動平均の日数", kind: "integer", default: 5, minimum: 1, maximum: 1000, exclusive_maximum: false, step: 1, help: "" },
-  { key: "long_window", label: "長期移動平均の日数", kind: "integer", default: 25, minimum: 1, maximum: 1000, exclusive_maximum: false, step: 1, help: "" },
-  { key: "fee_rate_pct", label: "手数料率", kind: "percent", default: 0.1, minimum: 0, maximum: 10, exclusive_maximum: true, step: 0.01, help: "" },
-  { key: "slippage_rate_pct", label: "スリッページ率", kind: "percent", default: 0.05, minimum: 0, maximum: 10, exclusive_maximum: true, step: 0.01, help: "" },
-  { key: "initial_cash", label: "初期資金", kind: "yen", default: 1_000_000, minimum: 1, maximum: 1_000_000_000, exclusive_maximum: false, step: 10_000, help: "" },
-];
+/** リポジトリの tests/fixtures/ にある JSON(API のテストと共有している)を読む。 */
+export function fixture<T>(name: string): T {
+  return JSON.parse(readFileSync(new URL(`../../tests/fixtures/${name}`, import.meta.url), "utf-8")) as T;
+}
+
+/**
+ * 移動平均クロスのパラメータの定義。API が返すもの(GET /api/strategies)をそのまま保存したファイルを読む。
+ * API 側のテスト(tests/python/test_param_contract.py)が、このファイルと API の定義が同じことを確かめている。
+ */
+export const SPECS: ParamSpec[] = fixture<ParamSpec[]>("ma_cross_params.json");
 
 export const STRATEGIES: Strategy[] = [
   { id: "ma_cross", name: "移動平均クロス", summary: "", description: "", available: true, params: SPECS },

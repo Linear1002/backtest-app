@@ -18,7 +18,6 @@ import {
   formatShares,
   formatSignedYen,
   formatYen,
-  formatYenCompact,
 } from "./format.ts";
 
 test("円の表示", () => {
@@ -52,11 +51,7 @@ test("株価・株数・率・係数", () => {
   assert.equal(formatDecimal(10), "10");
 });
 
-test("軸用の短い円表記", () => {
-  assert.equal(formatYenCompact(1_500_000), "150万");
-  assert.equal(formatYenCompact(123_456_789), "1.23億");
-  assert.equal(formatYenCompact(4200), "4,200");
-  assert.equal(formatYenCompact(10_000), "1万");
+test("金額の補助表示(万円・億円)", () => {
   assert.equal(describeYen(1_000_000), "100万円");
   // ちょうどでないときは「約」を付ける
   assert.equal(describeYen(1_234_567), "約123万円");

@@ -2,19 +2,22 @@
 
 import { useCallback, useEffect, useReducer, useRef } from "react";
 
-import { api, ApiError, errorMessage, type BacktestRequest, type ParamKey, type SymbolSummary } from "@/lib/api.ts";
+import { api, errorMessage, type ParamKey, type SymbolSummary } from "@/lib/api.ts";
 import {
   canVisit,
   currentRequest,
+  fieldErrorsFrom,
   flowReducer,
   initialFlow,
+  needsSymbolLoad,
   resultIsOutdated,
+  runErrorMessage,
   selectedStrategy,
   type FlowState,
   type StepId,
 } from "@/lib/flow.ts";
 import { describeYen, formatDate, formatRatePct, formatYen } from "@/lib/format.ts";
-import { parseParams, toNumber, type FieldErrors } from "@/lib/form.ts";
+import { parseParams, toNumber } from "@/lib/form.ts";
 
 import { ResultView } from "./results/ResultView.tsx";
 import { Seal } from "./Seal.tsx";
@@ -24,17 +27,6 @@ import { ParamsStep } from "./steps/ParamsStep.tsx";
 import { StrategyStep } from "./steps/StrategyStep.tsx";
 import { SymbolStep } from "./steps/SymbolStep.tsx";
 import { SecondaryButton } from "./ui.tsx";
-
-/** API のエラーのうち、入力欄に出せるもの(条件の項目と期間)だけを取り出す。 */
-function fieldErrorsFrom(error: unknown, request: BacktestRequest): FieldErrors {
-  if (!(error instanceof ApiError)) return {};
-  const known = new Set<string>([...Object.keys(request.params), "start_date", "end_date"]);
-  const picked: FieldErrors = {};
-  for (const [field, message] of Object.entries(error.fieldErrors())) {
-    if (known.has(field) && message) picked[field as keyof FieldErrors] = message;
-  }
-  return picked;
-}
 
 export function BacktestApp() {
   const [state, dispatch] = useReducer(flowReducer, initialFlow);
@@ -76,7 +68,7 @@ export function BacktestApp() {
   }, [state.focus]);
 
   function selectSymbol(next: SymbolSummary) {
-    if (next.id === state.symbol?.id && state.detailError === null) return;
+    if (state.running || !needsSymbolLoad(state, next)) return;
     seq.current += 1;
     const request = seq.current;
     dispatch({ type: "selectSymbol", symbol: next, request });
@@ -93,19 +85,18 @@ export function BacktestApp() {
     if (!request || state.running) return;
     seq.current += 1;
     const id = seq.current;
-    dispatch({ type: "runStarted", id });
+    // 送るリクエストそのものを記録する(結果の画面に移れるかは、この条件で判定する)
+    dispatch({ type: "runStarted", id, request });
     try {
       const result = await api.runBacktest(request);
       dispatch({ type: "runSucceeded", id, result });
     } catch (e: unknown) {
-      dispatch({
-        type: "runFailed",
-        id,
-        message: errorMessage(e, "バックテストを実行できませんでした"),
-        fieldErrors: fieldErrorsFrom(e, request),
-      });
+      dispatch({ type: "runFailed", id, message: runErrorMessage(e, request), fieldErrors: fieldErrorsFrom(e, request) });
     }
   }
+
+  // 結果の動きを再生し終えたら記録する(dispatch は変わらないので、この関数も描き直しで変わらない)
+  const onAnimated = useCallback((id: number) => dispatch({ type: "resultAnimated", id }), []);
 
   const goTo = (step: StepId) => dispatch({ type: "goTo", step });
   const strategy = selectedStrategy(state);
@@ -217,7 +208,7 @@ export function BacktestApp() {
               key={state.last.id}
               record={state.last}
               animate={state.animated !== state.last.id}
-              onAnimated={(id) => dispatch({ type: "resultAnimated", id })}
+              onAnimated={onAnimated}
               onEditParams={() => goTo(3)}
               onRestart={() => goTo(1)}
             />

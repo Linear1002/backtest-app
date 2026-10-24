@@ -7,16 +7,18 @@
 // 決まりごと
 // - 問い合わせには番号を付け、いちばん新しい番号の応答だけを受け取る(銘柄の詳細・バックテストの実行)
 // - 結果の画面(手順5)に行けるのは、いまの条件がその結果を出した条件と同じときだけ。条件を変えたら、もう一度実行する
-// - 実行中は手順を移動できない
+// - 実行中は、手順の移動も条件の変更も受け付けない(送ったリクエストと記録する条件がずれないように)
 
-import type {
-  BacktestRequest,
-  BacktestResult,
-  Meta,
-  ParamSpec,
-  Strategy,
-  SymbolDetail,
-  SymbolSummary,
+import {
+  ApiError,
+  errorMessage,
+  type BacktestRequest,
+  type BacktestResult,
+  type Meta,
+  type ParamSpec,
+  type Strategy,
+  type SymbolDetail,
+  type SymbolSummary,
 } from "./api.ts";
 import { defaultForm, parseParams, validatePeriod, type FieldErrors, type FormState } from "./form.ts";
 
@@ -73,7 +75,7 @@ export type FlowAction =
   | { type: "editForm"; form: FormState }
   | { type: "submitParams" }
   | { type: "selectEngine"; id: string }
-  | { type: "runStarted"; id: number }
+  | { type: "runStarted"; id: number; request: BacktestRequest }
   | { type: "runSucceeded"; id: number; result: BacktestResult }
   | { type: "runFailed"; id: number; message: string; fieldErrors: FieldErrors }
   | { type: "resultAnimated"; id: number };
@@ -104,8 +106,27 @@ export function selectedStrategy(state: FlowState): Strategy | null {
   return state.catalog?.strategies.find((s) => s.id === state.strategyId) ?? null;
 }
 
+/** 選んでいる戦略が計算に使えるなら、その戦略(「今後追加予定」の戦略は null)。 */
+function usableStrategy(state: FlowState): Strategy | null {
+  const strategy = selectedStrategy(state);
+  return strategy?.available ? strategy : null;
+}
+
 function specsOf(state: FlowState): ParamSpec[] | null {
   return selectedStrategy(state)?.params ?? null;
+}
+
+/**
+ * 条件の画面(手順3)に入れる状態か。銘柄の詳細があり、使える戦略を選んでいて、入力欄があること。
+ * 「この売買ルールで進む」(advance)と、手順の表示から移るとき(canVisit)の両方がこれを使う。
+ */
+function paramsReady(state: FlowState): boolean {
+  return state.detail !== null && usableStrategy(state) !== null && state.form !== null;
+}
+
+/** 銘柄を選んだときに、詳細を読みにいく必要があるか(同じ銘柄の選び直しは、失敗していたときだけ読み直す)。 */
+export function needsSymbolLoad(state: FlowState, symbol: SymbolSummary): boolean {
+  return symbol.id !== state.symbol?.id || state.detailError !== null;
 }
 
 /** いまの入力の誤り(パラメータと期間)。誤りがなければ空。 */
@@ -117,7 +138,7 @@ export function formErrors(state: FlowState): FieldErrors {
 
 /** いまの条件で実行するときのリクエスト。条件がそろっていない・誤りがあるときは null。 */
 export function currentRequest(state: FlowState): BacktestRequest | null {
-  const strategy = selectedStrategy(state);
+  const strategy = usableStrategy(state);
   if (!state.form || !state.detail || !strategy) return null;
   const { params } = parseParams(state.form, strategy.params);
   if (!params || Object.keys(validatePeriod(state.form, state.detail.range)).length > 0) return null;
@@ -147,7 +168,7 @@ export function sameRequest(a: BacktestRequest | null, b: BacktestRequest | null
   return true;
 }
 
-/** その手順に移れるか(手順の表示・条件票から移るときに使う)。 */
+/** その手順に移れるか(手順の表示・条件票から移るときに使う)。実行中は、いまの手順以外には移れない。 */
 export function canVisit(state: FlowState, step: StepId): boolean {
   if (state.running && step !== state.step) return false;
   switch (step) {
@@ -156,9 +177,9 @@ export function canVisit(state: FlowState, step: StepId): boolean {
     case 2:
       return state.detail !== null;
     case 3:
-      return state.detail !== null && selectedStrategy(state) !== null && state.form !== null && state.visited >= 3;
+      return paramsReady(state) && state.visited >= 3;
     case 4:
-      return canVisit(state, 3) && state.visited >= 4 && currentRequest(state) !== null;
+      return paramsReady(state) && state.visited >= 4 && currentRequest(state) !== null;
     case 5:
       return state.last !== null && sameRequest(state.last.request, currentRequest(state));
   }
@@ -167,6 +188,42 @@ export function canVisit(state: FlowState, step: StepId): boolean {
 /** いまの条件は、前に出した結果の条件と違うか(確認の画面で「もう一度実行すると新しい結果になる」と伝える)。 */
 export function resultIsOutdated(state: FlowState): boolean {
   return state.last !== null && !sameRequest(state.last.request, currentRequest(state));
+}
+
+// --- 実行のエラーの振り分け ---------------------------------------------------------
+
+/** 入力欄のある項目(条件の項目と期間)。API のエラーのうち、これに当たるものは条件の画面のその欄に出す。 */
+function formFields(request: BacktestRequest): Set<string> {
+  return new Set([...Object.keys(request.params), "start_date", "end_date"]);
+}
+
+/** API のエラーのうち、入力欄に出せるものだけを取り出す。ApiError 以外は空。 */
+export function fieldErrorsFrom(error: unknown, request: BacktestRequest): FieldErrors {
+  if (!(error instanceof ApiError)) return {};
+  const known = formFields(request);
+  const picked: FieldErrors = {};
+  for (const [field, message] of Object.entries(error.fieldErrors())) {
+    if (known.has(field) && message) picked[field as keyof FieldErrors] = message;
+  }
+  return picked;
+}
+
+/**
+ * 確認の画面に出す実行のエラーの文。入力欄に出せない項目(銘柄・戦略・エンジンなど)のエラーは、
+ * 何を直せばよいかが分かるように、その説明を添える(例:「入力内容を確認してください(この戦略はまだ使えません)」)。
+ */
+export function runErrorMessage(error: unknown, request: BacktestRequest): string {
+  const base = errorMessage(error, "バックテストを実行できませんでした");
+  if (!(error instanceof ApiError)) return base;
+  const known = formFields(request);
+  const extras = [
+    ...new Set(
+      error.errors
+        .filter((e) => (e.field === null || !known.has(e.field)) && e.message && e.message !== base)
+        .map((e) => e.message),
+    ),
+  ];
+  return extras.length ? `${base}(${extras.join("・")})` : base;
 }
 
 // --- 状態の移り変わり(reducer) ---------------------------------------------------
@@ -185,12 +242,37 @@ function moveTo(state: FlowState, step: StepId): FlowState {
   };
 }
 
+/** 入力が変わった項目のエラーだけを消す(ほかの欄のエラーは、直すまで残す)。 */
+function clearChangedErrors(errors: FieldErrors, before: FormState | null, after: FormState): FieldErrors {
+  const next: FieldErrors = { ...errors };
+  for (const key of Object.keys(next) as (keyof FieldErrors)[]) {
+    const changed =
+      key === "start_date" || key === "end_date"
+        ? before?.[key] !== after[key]
+        : before?.params[key] !== after.params[key];
+    if (changed) delete next[key];
+  }
+  return next;
+}
+
+/** 実行中は受け付けない action(条件や手順を変えるもの)。 */
+const BLOCKED_WHILE_RUNNING = new Set<FlowAction["type"]>([
+  "selectSymbol",
+  "selectStrategy",
+  "goTo",
+  "advance",
+  "editForm",
+  "submitParams",
+  "selectEngine",
+]);
+
 export function flowReducer(state: FlowState, action: FlowAction): FlowState {
+  if (state.running && BLOCKED_WHILE_RUNNING.has(action.type)) return state;
   switch (action.type) {
     case "catalogLoaded": {
       const next = { ...state, catalog: { meta: action.meta, strategies: action.strategies }, catalogError: null };
-      // 選んでいた戦略がない(一覧が変わった)ときは、最初の使える戦略にする
-      if (!selectedStrategy(next)) {
+      // 選んでいた戦略が一覧にない・使えない(一覧が変わった)ときは、最初の使える戦略にする
+      if (!usableStrategy(next)) {
         next.strategyId = action.strategies.find((s) => s.available)?.id ?? null;
       }
       // 詳細を先に受け取っていたら、ここで入力欄の初期値を作る
@@ -206,8 +288,7 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
       return { ...state, catalogError: null };
 
     case "selectSymbol": {
-      // 同じ銘柄を選び直しても何もしない(読み込みに失敗していたときだけ、読み直す)
-      if (action.symbol.id === state.symbol?.id && state.detailError === null) return state;
+      if (!needsSymbolLoad(state, action.symbol)) return state;
       return {
         ...state,
         symbol: action.symbol,
@@ -244,8 +325,7 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
       const specs = specsOf(next);
       // 戦略が変わったらパラメータの項目も変わるので、期間だけを残して既定値にする
       if (state.form && specs) {
-        const fresh = defaultForm(specs, { first_date: state.form.start_date, last_date: state.form.end_date });
-        next.form = fresh;
+        next.form = defaultForm(specs, { first_date: state.form.start_date, last_date: state.form.end_date });
       }
       return next;
     }
@@ -257,21 +337,26 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
 
     case "advance": {
       // 「この銘柄で進む」「この売買ルールで進む」(条件 → 確認は submitParams、確認 → 結果は実行)
-      if (state.running) return state;
       if (state.step === 1) return state.detail ? moveTo(state, 2) : state;
       if (state.step === 2) {
         const specs = specsOf(state);
-        if (!state.detail || !specs || !selectedStrategy(state)?.available) return state;
-        return moveTo({ ...state, form: state.form ?? defaultForm(specs, state.detail.range) }, 3);
+        if (!state.detail || !specs) return state;
+        const next = { ...state, form: state.form ?? defaultForm(specs, state.detail.range) };
+        return paramsReady(next) ? moveTo(next, 3) : state;
       }
       return state;
     }
 
     case "editForm":
-      return { ...state, form: action.form, fieldErrors: {}, runError: null };
+      return {
+        ...state,
+        form: action.form,
+        fieldErrors: clearChangedErrors(state.fieldErrors, state.form, action.form),
+        runError: null,
+      };
 
     case "submitParams": {
-      if (!state.form || !state.detail || !specsOf(state)) return state;
+      if (!paramsReady(state)) return state;
       const errors = formErrors(state);
       if (Object.keys(errors).length > 0) {
         return { ...state, fieldErrors: errors, focus: focus(state, "error") };
@@ -283,13 +368,13 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
       return { ...state, engine: action.id, runError: null };
 
     case "runStarted": {
-      const request = currentRequest(state);
-      if (state.running || !request) return state;
-      return { ...state, running: { id: action.id, request }, runError: null };
+      // 送るリクエストが、いまの条件と同じときだけ実行中にする(記録するのは送ったリクエストそのもの)
+      if (state.running || !sameRequest(action.request, currentRequest(state))) return state;
+      return { ...state, running: { id: action.id, request: action.request }, runError: null };
     }
 
     case "runSucceeded": {
-      // 取り消された・新しい実行に置きかわった実行の結果は捨てる
+      // いま実行中のもの(番号が同じ)以外の応答は捨てる
       if (!state.running || state.running.id !== action.id) return state;
       const last: RunRecord = { id: action.id, request: state.running.request, result: action.result };
       return moveTo({ ...state, running: null, last }, 5);

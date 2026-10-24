@@ -1,8 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { defaultForm, numberText, parseParams, presetPeriod, toNumber, validatePeriod, type FormState } from "./form.ts";
-import { SPECS } from "./testing.ts";
+import {
+  defaultForm,
+  numberText,
+  parseParams,
+  presetPeriod,
+  toNumber,
+  validatePeriod,
+  type FieldErrors,
+  type FormState,
+} from "./form.ts";
+import { fixture, SPECS } from "./testing.ts";
 
 const range = { first_date: "2022-01-04", last_date: "2026-07-31" };
 
@@ -41,46 +50,44 @@ test("受け付ける数値の形", () => {
   }
 });
 
+test("カンマは3桁区切りの位置だけ受け付ける(「0,1」を黙って 1 にしない)", () => {
+  assert.equal(toNumber("1,000,000"), 1_000_000);
+  assert.equal(toNumber("１，０００"), 1000); // 全角のカンマも3桁区切りなら可
+  assert.equal(toNumber("-1,234.5"), -1234.5);
+  for (const bad of ["0,1", "1,5", "1,00", "1,0000", ",100", "100,", "1,,000"]) {
+    assert.equal(toNumber(bad), null, bad);
+  }
+  assert.equal(errorOf("fee_rate_pct", "0,1"), "数値で入力してください");
+});
+
 test("正しい入力は数値になる", () => {
   const { params, errors } = parseParams(form({ initial_cash: "１,０００,０００" }), SPECS);
   assert.deepEqual(errors, {});
   assert.deepEqual(params, { short_window: 5, long_window: 25, fee_rate_pct: 0.1, slippage_rate_pct: 0.05, initial_cash: 1_000_000 });
 });
 
-test("仕様(4.3)・API と同じメッセージ", () => {
-  assert.equal(
-    parseParams(form({ short_window: "25", long_window: "5" }), SPECS).errors.short_window,
-    "短期の日数は長期の日数より小さくしてください",
-  );
-  assert.equal(
-    parseParams(form({ short_window: "25", long_window: "25" }), SPECS).errors.short_window,
-    "短期の日数は長期の日数より小さくしてください",
-  );
-  assert.equal(errorOf("short_window", "2.5"), "日数は1以上の整数で入力してください");
-  assert.equal(errorOf("short_window", "0"), "日数は1以上の整数で入力してください");
-  assert.equal(errorOf("long_window", "1001"), "日数は1000以下で入力してください");
-  assert.equal(errorOf("fee_rate_pct", "-1"), "手数料率とスリッページ率は0以上で入力してください");
-  assert.equal(errorOf("slippage_rate_pct", "10"), "手数料率とスリッページ率は10%未満で入力してください");
-  assert.equal(errorOf("initial_cash", "0"), "初期資金は1円以上で入力してください");
-  assert.equal(errorOf("initial_cash", "0.5"), "初期資金は1円以上で入力してください");
-  assert.equal(errorOf("initial_cash", "1000000001"), "初期資金は10億円以下で入力してください");
-  for (const bad of ["abc", "", "   ", "0x10", "Infinity"]) {
-    assert.equal(errorOf("initial_cash", bad), "数値で入力してください", bad);
+type MessageCase = {
+  params: Partial<FormState["params"]>;
+  field: keyof FieldErrors | null;
+  message: string | null;
+  frontend_only: boolean;
+};
+
+// 入力 → 誤りのメッセージ の表。API のテスト(tests/python/test_param_contract.py)も同じ表を読むので、
+// 画面と API で判定やメッセージの文がずれたら、どちらかのテストが落ちる(仕様 4.3)
+const MESSAGE_CASES = fixture<{ cases: MessageCase[] }>("param_messages.json").cases;
+
+test("仕様(4.3)のメッセージ:API と同じ表で確かめる", () => {
+  assert.ok(MESSAGE_CASES.length >= 20);
+  for (const c of MESSAGE_CASES) {
+    const { errors } = parseParams(form(c.params), SPECS);
+    const label = JSON.stringify(c.params);
+    if (c.field === null) assert.deepEqual(errors, {}, label);
+    else assert.equal(errors[c.field], c.message, label);
   }
 });
 
-test("境界の値は通る", () => {
-  for (const [key, text] of [
-    ["fee_rate_pct", "0"],
-    ["fee_rate_pct", "9.99"],
-    ["slippage_rate_pct", "0"],
-    ["initial_cash", "1"],
-    ["initial_cash", "1000000000"],
-    ["long_window", "1000"],
-  ] as const) {
-    assert.equal(errorOf(key, text), undefined, `${key}=${text}`);
-  }
-  // 1つでも誤りがあれば params は null(誤りのない項目のエラーは出さない)
+test("誤りが1つでもあれば params は null。誤りのない項目にはエラーを出さない", () => {
   const both = parseParams(form({ fee_rate_pct: "-1", initial_cash: "abc" }), SPECS);
   assert.equal(both.params, null);
   assert.deepEqual(Object.keys(both.errors).sort(), ["fee_rate_pct", "initial_cash"]);
