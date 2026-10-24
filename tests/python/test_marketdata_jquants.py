@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from backend.marketdata.jquants import (
+    WAIT_AFTER_429_SECONDS,
     JQuantsClient,
     JQuantsDataSource,
     RateLimiter,
@@ -153,7 +154,9 @@ def test_client_waits_after_429_and_retries() -> None:
 
     make_client(handler, clock).daily_bars(code="72030")
     assert calls["n"] == 2
-    assert any(s >= 60 for s in clock.sleeps)  # 1分以上待ってから再送している
+    # 公式の推奨(1分以上、確実を期すなら2分程度)どおり、2分待ってから再送している
+    assert WAIT_AFTER_429_SECONDS >= 120
+    assert any(s >= WAIT_AFTER_429_SECONDS for s in clock.sleeps)
 
 
 def test_client_gives_up_after_repeated_429() -> None:
@@ -308,9 +311,9 @@ def test_rate_limiter_is_safe_across_threads() -> None:
 def test_rate_limiter_block_for_makes_everyone_wait() -> None:
     clock = FakeClock()
     limiter = RateLimiter(5, clock=clock, sleep=clock.sleep)
-    limiter.block_for(65)
+    limiter.block_for(WAIT_AFTER_429_SECONDS)
     limiter.acquire()
-    assert clock.sleeps and clock.sleeps[0] >= 65
+    assert clock.sleeps and clock.sleeps[0] >= WAIT_AFTER_429_SECONDS
 
 
 def test_rate_limiter_refuses_to_wait_longer_than_max_wait() -> None:
@@ -329,8 +332,8 @@ def test_interactive_client_does_not_sleep_after_429() -> None:
     client = make_client(lambda request: httpx.Response(429), clock, max_wait=15)
     with pytest.raises(RateLimitExceededError) as error:
         client.daily_bars(code="72030")
-    assert "約65秒" in str(error.value)
-    assert clock.sleeps == []  # 画面からのリクエストでは65秒も待たない
+    assert "約2分待ってから" in str(error.value)
+    assert clock.sleeps == []  # 画面からのリクエストでは2分も待たない
 
 
 def test_client_retries_server_errors_then_succeeds() -> None:
