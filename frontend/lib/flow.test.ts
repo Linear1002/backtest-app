@@ -11,6 +11,7 @@ import {
   needsSymbolLoad,
   resultIsOutdated,
   runErrorMessage,
+  unplacedErrorMessage,
   type FlowAction,
   type FlowState,
 } from "./flow.ts";
@@ -168,6 +169,34 @@ test("入力を直すと、直した欄の誤りだけが消える(ほかの欄�
   assert.equal(edit(period, {}, { start_date: "2024-01-04" }).fieldErrors.start_date, undefined);
 });
 
+test("2つの欄にまたがる誤りは、相手の欄を直しても消える(まだ当てはまる誤りは残る)", () => {
+  // 「短期は長期より小さく」は短期の欄に出る。長期を長くして直したら消える
+  const crossed = flowReducer(edit(atParams(), { short_window: "30" }), { type: "submitParams" });
+  assert.equal(crossed.fieldErrors.short_window, "短期の日数は長期の日数より小さくしてください");
+  assert.equal(edit(crossed, { long_window: "60" }).fieldErrors.short_window, undefined);
+  // 長期を変えても、まだ短期 ≥ 長期なら残る
+  assert.equal(edit(crossed, { long_window: "29" }).fieldErrors.short_window, "短期の日数は長期の日数より小さくしてください");
+  // 短期の欄だけの誤り(整数でない)は、長期を変えても残る
+  const own = flowReducer(edit(atParams(), { short_window: "2.5" }), { type: "submitParams" });
+  assert.equal(edit(own, { long_window: "30" }).fieldErrors.short_window, "日数は1以上の整数で入力してください");
+  // 開始日の欄に出た「開始日は終了日より前」は、終了日を直したら消える
+  const reversed = flowReducer(edit(atParams(), {}, { start_date: "2025-06-02", end_date: "2025-01-06" }), {
+    type: "submitParams",
+  });
+  assert.equal(reversed.fieldErrors.start_date, "開始日は終了日より前の日付にしてください");
+  assert.equal(edit(reversed, {}, { end_date: "2025-12-30" }).fieldErrors.start_date, undefined);
+  // API だけが確かめる誤り(営業日が3日未満)は、終了日を変えたら消す(次の実行でもう一度確かめる)
+  const running = started(atConfirm(), 9);
+  const short = flowReducer(running, {
+    type: "runFailed",
+    id: 9,
+    message: null,
+    fieldErrors: { start_date: "期間が短すぎます。営業日が3日以上になるように指定してください" },
+  });
+  assert.ok(short.fieldErrors.start_date);
+  assert.equal(edit(short, {}, { end_date: "2025-12-29" }).fieldErrors.start_date, undefined);
+});
+
 test("一度確認まで進んだあとに条件を誤りのある値にすると、確認の手順には移れない", () => {
   const confirmed = atConfirm();
   assert.equal(confirmed.step, 4);
@@ -244,13 +273,25 @@ test("実行の失敗:入力の誤りなら条件の画面に戻り、それ以�
   const fieldFail = flowReducer(running, {
     type: "runFailed",
     id: 7,
-    message: "入力内容を確認してください",
+    message: null,
     fieldErrors: { start_date: "期間が短すぎます。営業日が3日以上になるように指定してください" },
   });
   assert.equal(fieldFail.step, 3);
   assert.equal(fieldFail.running, null);
   assert.equal(fieldFail.focus.target, "error");
   assert.match(fieldFail.fieldErrors.start_date ?? "", /期間が短すぎます/);
+
+  assert.equal(fieldFail.runError, null); // 欄に出せる誤りだけのときは、画面の上には何も出さない
+
+  // 欄に出せない誤り(戦略など)も一緒なら、その文を条件の画面の上に出す
+  const mixed = flowReducer(running, {
+    type: "runFailed",
+    id: 7,
+    message: "入力内容を確認してください(この戦略はまだ使えません)",
+    fieldErrors: { fee_rate_pct: "手数料率とスリッページ率は0以上で入力してください" },
+  });
+  assert.equal(mixed.step, 3);
+  assert.equal(mixed.runError, "入力内容を確認してください(この戦略はまだ使えません)");
 
   const otherFail = flowReducer(running, { type: "runFailed", id: 7, message: "API サーバーに接続できません", fieldErrors: {} });
   assert.equal(otherFail.step, 4);
@@ -291,6 +332,13 @@ test("API のエラーの振り分け:入力欄のある項目だけを欄に出
     runErrorMessage(error, request),
     "入力内容を確認してください(この戦略はまだ使えません・C++ 版はまだビルドされていません)",
   );
+  // 欄に出せない誤りだけの文(条件の画面に戻るときに、画面の上に出す)
+  assert.equal(unplacedErrorMessage(error, request), runErrorMessage(error, request));
+  const onlyFields = new ApiError(422, "入力内容を確認してください", [
+    { field: "fee_rate_pct", message: "手数料率とスリッページ率は0以上で入力してください" },
+  ]);
+  assert.equal(unplacedErrorMessage(onlyFields, request), null);
+  assert.equal(unplacedErrorMessage(new Error("boom"), request), null);
   // ApiError 以外は、欄に出すものはなく、次にすることを添えた予備の文
   assert.deepEqual(fieldErrorsFrom(new Error("boom"), request), {});
   assert.match(runErrorMessage(new Error("boom"), request), /バックテストを実行できませんでした。ページを再読み込み/);
@@ -333,6 +381,24 @@ test("選んでいた戦略が一覧にない・使えないときは、最初�
   assert.equal(missing.strategyId, "ma_cross");
   const unavailable = flowReducer({ ...initialFlow, strategyId: "rsi_reversal" }, loaded);
   assert.equal(unavailable.strategyId, "ma_cross");
+});
+
+test("一覧を読み直して戦略が使えなくなったら、戦略を替え、入力欄も新しい戦略の既定値で作り直す", () => {
+  const s = edit(atParams(), { short_window: "7" }, { start_date: "2024-06-03" });
+  const renamed = STRATEGIES.map((st) => (st.id === "ma_cross" ? { ...st, id: "ma_cross_v2" } : st));
+  const next = flowReducer(s, { type: "catalogLoaded", meta: META, strategies: renamed });
+  assert.equal(next.strategyId, "ma_cross_v2");
+  assert.equal(next.form?.start_date, "2024-06-03");
+  assert.equal(next.form?.params.short_window, "5");
+});
+
+test("実行中に一覧が届いても、選んでいる戦略と入力欄は変えない", () => {
+  const running = started(atConfirm(), 5);
+  const renamed = STRATEGIES.map((st) => (st.id === "ma_cross" ? { ...st, id: "ma_cross_v2" } : st));
+  const next = flowReducer(running, { type: "catalogLoaded", meta: META, strategies: renamed });
+  assert.equal(next.strategyId, "ma_cross");
+  assert.equal(next.form, running.form);
+  assert.equal(next.catalog?.strategies[0].id, "ma_cross_v2");
 });
 
 test("戦略を変えると、期間は残し、パラメータは新しい戦略の既定値にする", () => {

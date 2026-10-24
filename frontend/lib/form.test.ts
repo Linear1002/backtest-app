@@ -81,9 +81,30 @@ test("仕様(4.3)のメッセージ:API と同じ表で確かめる", () => {
   assert.ok(MESSAGE_CASES.length >= 20);
   for (const c of MESSAGE_CASES) {
     const { errors } = parseParams(form(c.params), SPECS);
-    const label = JSON.stringify(c.params);
-    if (c.field === null) assert.deepEqual(errors, {}, label);
-    else assert.equal(errors[c.field], c.message, label);
+    // 表で指定した欄だけに、その文が出る(ほかの欄に余計な誤りが出ていないことも確かめる)
+    const expected = c.field === null ? {} : { [c.field]: c.message };
+    assert.deepEqual(errors, expected, JSON.stringify(c.params));
+  }
+});
+
+type PeriodCase = {
+  start_date: string;
+  end_date: string;
+  field: "start_date" | "end_date" | null;
+  message: string | null;
+  only: "frontend" | "api" | null;
+};
+
+// 期間の表(API のテストも同じ表を読む)。営業日の数は API だけが確かめるので、画面では確かめない
+const PERIODS = fixture<{ range: { first_date: string; last_date: string }; cases: PeriodCase[] }>(
+  "period_messages.json",
+);
+
+test("期間のメッセージ:API と同じ表で確かめる", () => {
+  for (const c of PERIODS.cases.filter((c) => c.only !== "api")) {
+    const errors = validatePeriod(form({}, { start_date: c.start_date, end_date: c.end_date }), PERIODS.range);
+    const expected = c.field === null ? {} : { [c.field]: c.message };
+    assert.deepEqual(errors, expected, `${c.start_date}〜${c.end_date}`);
   }
 });
 

@@ -24,6 +24,7 @@ export function ParamsStep({
   specs,
   form,
   errors,
+  notice = null,
   onChange,
   onNext,
 }: {
@@ -31,6 +32,8 @@ export function ParamsStep({
   specs: ParamSpec[];
   form: FormState;
   errors: FieldErrors;
+  /** 実行したときの、入力欄に出せない誤り(戦略・エンジンなど)の文 */
+  notice?: string | null;
   onChange: (next: FormState) => void;
   onNext: () => void;
 }) {
@@ -61,6 +64,12 @@ export function ParamsStep({
       <StepHeading id={headingId} step={3} title="条件を決める">
         期間と移動平均の日数、売買にかかる費用を決めます。迷ったら、そのまま進んで大丈夫です。
       </StepHeading>
+
+      {notice && (
+        <p role="alert" className="mt-6 rounded-md border border-shu px-4 py-3 text-[14px] text-shu">
+          {notice}
+        </p>
+      )}
 
       <form
         className="mt-6 space-y-8"
