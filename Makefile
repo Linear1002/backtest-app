@@ -14,11 +14,12 @@ setup: $(BUILD_DIR)/CMakeCache.txt
 $(BUILD_DIR)/CMakeCache.txt:
 	cmake -S . -B $(BUILD_DIR) -G Ninja
 
-# Python のテストと C++ のビルド・テスト
+# Python のテスト、C++ のビルド・テスト、画面の関数のテスト
 test: $(BUILD_DIR)/CMakeCache.txt
 	uv run pytest
 	cmake --build $(BUILD_DIR)
 	ctest --test-dir $(BUILD_DIR) --output-on-failure
+	npm --prefix frontend test
 
 # Python(ruff)と frontend(ESLint)の静的チェック
 lint:

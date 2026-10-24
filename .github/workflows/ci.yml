@@ -52,4 +52,39 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npm run lint
+      - run: npm test
       - run: npm run build
+
+  e2e:
+    name: 画面〜API の通しのテスト(Playwright・架空データ)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.2
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      # Playwright の版(package-lock.json)に合う Chromium と、動かすのに必要な OS のライブラリを入れる
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      # API サーバーと画面は playwright.config.ts の webServer が起動する(APIキーは使わない)
+      - run: npm run e2e
+        working-directory: frontend
+      - name: 失敗したときの記録(スクリーンショット・トレース)を残す
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          retention-days: 7

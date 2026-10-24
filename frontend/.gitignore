@@ -39,3 +39,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Playwright(画面〜API の通しのテスト)の結果
+/test-results/
+/playwright-report/
+/blob-report/
