@@ -6,8 +6,9 @@
 - 取引カレンダー:GET /v2/markets/calendar  https://jpx-jquants.com/en/spec/mkt-cal
 - 認証:APIキーを x-api-key ヘッダーで渡す
 - 続きがあるときは、レスポンスに pagination_key が入る
-- リクエスト数の上限:Free は1分間に5回。超えると 429(Retry-After ヘッダーなし)。429 も回数に数えられ、
-  大きく超え続けると約5分間すべてのリクエストがエラーになる  https://jpx-jquants.com/en/spec/rate-limits
+- リクエスト数の上限:Free は1分間に5回(1分間のスライディングウィンドウ)。超えると 429(Retry-After ヘッダーなし)。
+  429 も回数に数えられ、大きく超え続けると5分程度すべてのリクエストがエラーになる。
+  429 のあとは「1分以上(確実を期す場合は2分程度)待機」が推奨  https://jpx-jquants.com/ja/spec/rate-limits
 
 利用規約上、データは私的使用のみ(docs/mvp.md 3.2)。取得したデータは data/ に保存し、Git やアプリ経由で配布しない。
 APIキーは例外メッセージ・ログ・repr に絶対に出さない。
@@ -47,8 +48,9 @@ SOURCE_ID = "jquants"
 SOURCE_LABEL = "J-Quants API(東証)"
 LICENSE_NOTE = "J-Quants API のデータです。利用規約により私的使用に限られ、第三者への提供・再配布はできません。"
 
-# 429 が返ったあとに待つ秒数。公式には「1分以上待つ」とだけあるので、少し余裕を持たせる
-WAIT_AFTER_429_SECONDS = 65.0
+# 429 が返ったあとに待つ秒数。公式の推奨「1分以上(ウィンドウがスライドするため、確実を期す場合は2分程度)」の
+# 確実なほうに合わせる。早く再送すると、その 429 も回数に数えられて、制限が解けるのが遅くなる
+WAIT_AFTER_429_SECONDS = 120.0
 
 # 画面から来たリクエストで待ってよい最長の秒数。これより長く待つ必要があるときは、待たずに目安を伝える
 INTERACTIVE_MAX_WAIT_SECONDS = 15.0
@@ -157,6 +159,13 @@ def parse_symbol(item: dict[str, Any]) -> SymbolInfo | None:
 # --- レート制限 ---------------------------------------------------------------------
 
 
+def _wait_text(seconds: float) -> str:
+    """待つ時間の目安を短く書く(90秒未満は秒、それ以上は分。どちらも切り上げ)。"""
+    if seconds < 90:
+        return f"約{math.ceil(seconds)}秒"
+    return f"約{math.ceil(seconds / 60)}分"
+
+
 class RateLimiter:
     """直近 period 秒のリクエスト数が max_requests を超えないように待つ(スライディングウィンドウ)。
 
@@ -214,7 +223,7 @@ class RateLimiter:
             if max_wait is not None and (now - started) + wait > max_wait:
                 raise RateLimitExceededError(
                     f"J-Quants API のリクエスト数の上限(1分あたり{self.max_requests}回)に達しています。"
-                    f"約{math.ceil(wait)}秒後に、もう一度試してください"
+                    f"{_wait_text(wait)}後に、もう一度試してください"
                 )
             self._sleep(wait)
 
@@ -321,7 +330,7 @@ class JQuantsClient:
                 if last_attempt or interactive:
                     raise RateLimitExceededError(
                         "J-Quants API のリクエスト数の上限に達しました。"
-                        f"約{math.ceil(WAIT_AFTER_429_SECONDS)}秒待ってから、もう一度試してください"
+                        f"{_wait_text(WAIT_AFTER_429_SECONDS)}待ってから、もう一度試してください"
                     )
                 continue  # 次の acquire が、block_for の時刻まで待つ
             if status in (401, 403):
