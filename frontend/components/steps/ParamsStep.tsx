@@ -4,7 +4,7 @@ import { useId } from "react";
 
 import type { ParamKey, ParamSpec, SymbolDetail } from "@/lib/api.ts";
 import { describeYen, formatDate } from "@/lib/format.ts";
-import { presetPeriod, type FieldErrors, type FormState } from "@/lib/form.ts";
+import { presetPeriod, toNumber, type FieldErrors, type FormState } from "@/lib/form.ts";
 
 import { FieldError, PrimaryButton, StepHeading } from "../ui.tsx";
 
@@ -35,10 +35,26 @@ export function ParamsStep({
   onNext: () => void;
 }) {
   const headingId = useId();
-  const spec = (key: ParamKey) => specs.find((s) => s.key === key)!;
+  const spec = (key: ParamKey) => specs.find((s) => s.key === key) ?? null;
   const setParam = (key: ParamKey, value: string) =>
     onChange({ ...form, params: { ...form.params, [key]: value } });
   const range = detail.range;
+  const field = (key: ParamKey, unit: string, hint?: string) => {
+    const s = spec(key);
+    // 戦略の定義に項目がなければ出さない(戦略ごとに項目が違うため)
+    if (!s) return null;
+    return (
+      <NumberField
+        spec={s}
+        value={form.params[key] ?? ""}
+        unit={unit}
+        error={errors[key]}
+        hint={hint}
+        onChange={(v) => setParam(key, v)}
+      />
+    );
+  };
+  const cash = toNumber(form.params.initial_cash ?? "");
 
   return (
     <section aria-labelledby={headingId}>
@@ -107,27 +123,20 @@ export function ParamsStep({
             ))}
           </div>
           <div className="mt-3 grid gap-4 sm:grid-cols-2">
-            <NumberField spec={spec("short_window")} value={form.params.short_window} unit="日" error={errors.short_window} onChange={(v) => setParam("short_window", v)} />
-            <NumberField spec={spec("long_window")} value={form.params.long_window} unit="日" error={errors.long_window} onChange={(v) => setParam("long_window", v)} />
+            {field("short_window", "日")}
+            {field("long_window", "日")}
           </div>
         </Group>
 
         <Group title="売買の費用" note="売りと買いの両方にかかります。0 にすると実際より良い結果になりやすいので注意">
           <div className="grid gap-4 sm:grid-cols-2">
-            <NumberField spec={spec("fee_rate_pct")} value={form.params.fee_rate_pct} unit="%" error={errors.fee_rate_pct} onChange={(v) => setParam("fee_rate_pct", v)} />
-            <NumberField spec={spec("slippage_rate_pct")} value={form.params.slippage_rate_pct} unit="%" error={errors.slippage_rate_pct} onChange={(v) => setParam("slippage_rate_pct", v)} />
+            {field("fee_rate_pct", "%")}
+            {field("slippage_rate_pct", "%")}
           </div>
         </Group>
 
         <Group title="初期資金" note={`売買単位は${detail.market.lot_size}株。資金が${detail.market.lot_size}株分に足りないときは買いません`}>
-          <NumberField
-            spec={spec("initial_cash")}
-            value={form.params.initial_cash}
-            unit="円"
-            error={errors.initial_cash}
-            hint={describeYen(Number(form.params.initial_cash.normalize("NFKC").replaceAll(",", "")))}
-            onChange={(v) => setParam("initial_cash", v)}
-          />
+          {field("initial_cash", "円", cash !== null ? describeYen(cash) : undefined)}
         </Group>
 
         <div className="flex justify-end border-t border-rule pt-6">
@@ -193,7 +202,7 @@ function DateField({
         onChange={(e) => onChange(e.target.value)}
         aria-invalid={Boolean(error)}
         aria-describedby={error ? `${id}-error` : undefined}
-        className={`mt-1 w-full rounded-md border bg-surface px-3 py-2 tabular text-ink ${error ? "border-shu" : "border-rule-strong"}`}
+        className={`mt-1 w-full rounded-md border bg-surface px-3 py-2 tabular text-ink ${error ? "border-shu" : "border-field"}`}
       />
       <FieldError id={`${id}-error`} message={error} />
     </div>
@@ -229,7 +238,7 @@ function NumberField({
           onChange={(e) => onChange(e.target.value)}
           aria-invalid={Boolean(error)}
           aria-describedby={`${id}-help${error ? ` ${id}-error` : ""}`}
-          className={`w-full rounded-md border bg-surface px-3 py-2 text-right tabular text-ink ${error ? "border-shu" : "border-rule-strong"}`}
+          className={`w-full rounded-md border bg-surface px-3 py-2 text-right tabular text-ink ${error ? "border-shu" : "border-field"}`}
         />
         <span className="w-6 shrink-0 text-[14px] text-ink-2">{unit}</span>
       </div>

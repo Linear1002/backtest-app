@@ -2,22 +2,16 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { BacktestResult } from "@/lib/api.ts";
-import {
-  areaPath,
-  dateTicks,
-  linearScale,
-  linePath,
-  nearestIndex,
-  niceTicks,
-  paddedExtent,
-} from "@/lib/chart.ts";
-import { formatDateLong, formatPercent, formatPrice, formatYen, formatYenCompact } from "@/lib/format.ts";
+import type { BacktestResult, CorporateAction } from "@/lib/api.ts";
+import { areaPath, dateTicks, linearScale, linePath, nearestIndex, niceScale, paddedExtent } from "@/lib/chart.ts";
+import { axisLabels, formatDateLong, formatDecimal, formatPercent, formatPrice, formatYen } from "@/lib/format.ts";
 
 import { SvgSeal } from "../Seal.tsx";
 
-type Action = { date: string; ex_rt: number | null; label: string; adj_factor: number };
-type Props = { result: BacktestResult; actions: Action[]; animate: boolean };
+type Props = { result: BacktestResult; actions: CorporateAction[]; animate: boolean };
+
+/** Shift+矢印・PageUp/PageDown で動かす日数 */
+const BIG_STEP = 20;
 
 const MARGIN = { left: 60, right: 14 };
 const LABEL = 22; // パネルの上の見出しの高さ
@@ -75,10 +69,9 @@ export function TimeSeriesCharts({ result, actions, animate }: Props) {
     const ddMax = Math.max(0.01, ...daily.map((d) => d.drawdown)) * 1.08;
     const yDd = linearScale([0, ddMax], [top.dd, top.dd + heights.dd]);
 
-    // 分割・併合の権利落ち日は、株価(未調整)と移動平均の線を切る(値動きではないため)
-    const breaks = new Set(
-      actions.filter((a) => a.ex_rt === 1 || a.ex_rt === 2).map((a) => a.date),
-    );
+    // 分割・併合で持ち株数が変わる日は、株価(未調整)と移動平均の線を切る(値動きではないため)。
+    // エンジンと同じ条件(ExRT が1か2で、係数が1でない日。docs/mvp.md 2.8)を API が changes_shares で返す
+    const breaks = new Set(actions.filter((a) => a.changes_shares).map((a) => a.date));
     const series = (
       pick: (i: number) => number | null,
       y: (v: number) => number,
@@ -93,14 +86,23 @@ export function TimeSeriesCharts({ result, actions, animate }: Props) {
       return linePath(points);
     };
 
+    // 目盛りの数字は、目盛りの間隔から桁数を決めてそろえる(102.5万を「103万」と書かないように)
+    const priceScale = niceScale(pMin, pMax, compact ? 3 : 5);
+    const equityScale = niceScale(eMin, eMax, compact ? 3 : 4);
+    const ddScale = niceScale(0, ddMax, 2);
+    const ticks = (scale: { ticks: number[]; step: number }, kind: "yen" | "percent") => {
+      const labels = axisLabels(scale.ticks, scale.step, kind);
+      return scale.ticks.map((value, i) => ({ value, label: labels[i] }));
+    };
+
     return {
       x,
       yPrice,
       yEquity,
       yDd,
-      priceTicks: niceTicks(pMin, pMax, compact ? 3 : 5),
-      equityTicks: niceTicks(eMin, eMax, compact ? 3 : 4),
-      ddTicks: niceTicks(0, ddMax, 2),
+      priceTicks: ticks(priceScale, "yen"),
+      equityTicks: ticks(equityScale, "yen"),
+      ddTicks: ticks(ddScale, "percent"),
       closePath: series((i) => daily[i].close, yPrice, true),
       shortPath: series((i) => daily[i].short_ma, yPrice, true),
       longPath: series((i) => daily[i].long_ma, yPrice, true),
@@ -133,25 +135,46 @@ export function TimeSeriesCharts({ result, actions, animate }: Props) {
   }
 
   function onKeyDown(e: React.KeyboardEvent) {
-    const step = e.shiftKey ? 20 : 1;
-    if (e.key === "ArrowLeft") setHover(Math.max(0, index - step));
-    else if (e.key === "ArrowRight") setHover(Math.min(n - 1, index + step));
+    const step = e.shiftKey ? BIG_STEP : 1;
+    if (e.key === "ArrowLeft" || e.key === "ArrowDown") setHover(Math.max(0, index - step));
+    else if (e.key === "ArrowRight" || e.key === "ArrowUp") setHover(Math.min(n - 1, index + step));
+    else if (e.key === "PageDown") setHover(Math.max(0, index - BIG_STEP));
+    else if (e.key === "PageUp") setHover(Math.min(n - 1, index + BIG_STEP));
     else if (e.key === "Home") setHover(0);
     else if (e.key === "End") setHover(n - 1);
     else return;
     e.preventDefault();
   }
 
+  // マウスが離れたら最終日の表示に戻す。タッチは指を離しても、選んだ日のままにする
+  function onPointerLeave(e: React.PointerEvent) {
+    if (e.pointerType === "mouse") setHover(null);
+  }
+
+  // 読み上げ用:いま選んでいる日の数値(スライダーの値として伝える)
+  const valueText = [
+    formatDateLong(current.date),
+    `終値 ${current.close === null ? "売買なし" : `${formatPrice(current.close)}円`}`,
+    `資産額 ${formatYen(current.equity)}`,
+    `ドローダウン ${formatPercent(current.drawdown, { digits: 1 })}`,
+    `株数 ${current.shares.toLocaleString("ja-JP")}株`,
+  ].join("、");
+
   return (
     <figure className="m-0">
       <Legend result={result} />
       <Readout result={result} index={index} />
+      {/* キーボードと読み上げでは「日付を選ぶスライダー」として扱う(数値は aria-valuetext で伝える) */}
       <div
         ref={ref}
         className="relative mt-2 touch-pan-y outline-none focus-visible:ring-2 focus-visible:ring-[var(--ai)]"
         tabIndex={0}
-        role="group"
-        aria-label="株価・資産額・ドローダウンのチャート。左右の矢印キーで日付を動かせます"
+        role="slider"
+        aria-label="チャートの日付"
+        aria-valuemin={0}
+        aria-valuemax={Math.max(0, n - 1)}
+        aria-valuenow={index}
+        aria-valuetext={valueText}
         onKeyDown={onKeyDown}
       >
         <svg
@@ -160,7 +183,7 @@ export function TimeSeriesCharts({ result, actions, animate }: Props) {
           className="block overflow-visible"
           onPointerMove={(e) => pickIndex(e.clientX, e.currentTarget)}
           onPointerDown={(e) => pickIndex(e.clientX, e.currentTarget)}
-          onPointerLeave={() => setHover(null)}
+          onPointerLeave={onPointerLeave}
           aria-hidden="true"
         >
           {/* 縦の目盛り線(日付) */}
@@ -186,8 +209,8 @@ export function TimeSeriesCharts({ result, actions, animate }: Props) {
 
           {/* --- 株価と移動平均 --- */}
           <PanelLabel x={MARGIN.left} y={top.price} text="株価(円)" />
-          {geometry.priceTicks.map((v) => (
-            <HTick key={`p-${v}`} y={yPrice(v)} left={MARGIN.left} right={width - MARGIN.right} label={formatYenCompact(v)} />
+          {geometry.priceTicks.map((t) => (
+            <HTick key={`p-${t.value}`} y={yPrice(t.value)} left={MARGIN.left} right={width - MARGIN.right} label={t.label} />
           ))}
           {actions.map((a) => {
             const i = dateIndex.get(a.date);
@@ -206,12 +229,12 @@ export function TimeSeriesCharts({ result, actions, animate }: Props) {
                   strokeWidth={4}
                   paintOrder="stroke"
                 >
-                  {a.label}(係数 {a.adj_factor})
+                  {a.label}(係数 {formatDecimal(a.adj_factor)})
                 </text>
               </g>
             );
           })}
-          <path d={geometry.closePath} fill="none" stroke="var(--price)" strokeWidth={1.25} strokeLinejoin="round" opacity={0.85} />
+          <path d={geometry.closePath} fill="none" stroke="var(--price)" strokeWidth={1.25} strokeLinejoin="round" strokeLinecap="round" opacity={0.85} />
           <path d={geometry.longPath} fill="none" stroke="var(--ma-long)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
           <path d={geometry.shortPath} fill="none" stroke="var(--ma-short)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
           {result.fills.map((f, k) => {
@@ -233,8 +256,8 @@ export function TimeSeriesCharts({ result, actions, animate }: Props) {
 
           {/* --- 資産額 --- */}
           <PanelLabel x={MARGIN.left} y={top.equity} text="資産額(円)" />
-          {geometry.equityTicks.map((v) => (
-            <HTick key={`e-${v}`} y={yEquity(v)} left={MARGIN.left} right={width - MARGIN.right} label={formatYenCompact(v)} />
+          {geometry.equityTicks.map((t) => (
+            <HTick key={`e-${t.value}`} y={yEquity(t.value)} left={MARGIN.left} right={width - MARGIN.right} label={t.label} />
           ))}
           <line
             x1={MARGIN.left}
@@ -261,8 +284,8 @@ export function TimeSeriesCharts({ result, actions, animate }: Props) {
 
           {/* --- ドローダウン --- */}
           <PanelLabel x={MARGIN.left} y={top.dd} text="ドローダウン" />
-          {geometry.ddTicks.map((v) => (
-            <HTick key={`d-${v}`} y={yDd(v)} left={MARGIN.left} right={width - MARGIN.right} label={v === 0 ? "0%" : `−${(v * 100).toFixed(0)}%`} />
+          {geometry.ddTicks.map((t) => (
+            <HTick key={`d-${t.value}`} y={yDd(t.value)} left={MARGIN.left} right={width - MARGIN.right} label={t.label} />
           ))}
           <path d={geometry.ddArea} fill="var(--ai)" opacity={0.12} />
           <path d={geometry.ddPath} fill="none" stroke="var(--ai)" strokeWidth={1.5} strokeLinejoin="round" />
@@ -295,6 +318,7 @@ export function TimeSeriesCharts({ result, actions, animate }: Props) {
       </div>
       <figcaption className="mt-2 text-[12px] leading-6 text-ink-3">
         横軸は営業日(休場日のすき間は詰めています)。株価は分割前後でそのまま(未調整)、移動平均はその日までに分かる情報で調整した値です。
+        チャートを選んで、矢印キーで1日ずつ、Shift+矢印キーで{BIG_STEP}日ずつ、Home・End で最初と最後の日に動かせます。
       </figcaption>
     </figure>
   );
@@ -363,6 +387,7 @@ function Legend({ result }: { result: BacktestResult }) {
   );
 }
 
+/** 上の読み取り欄。読み上げはチャートのスライダー(aria-valuetext)が受け持つので、ここは見た目だけにする。 */
 function Readout({ result, index }: { result: BacktestResult; index: number }) {
   const d = result.daily[index];
   const item = (label: string, value: string, color?: string) => (
@@ -373,7 +398,7 @@ function Readout({ result, index }: { result: BacktestResult; index: number }) {
     </span>
   );
   return (
-    <div className="mt-3 flex min-h-[3.25rem] flex-wrap items-baseline gap-x-4 gap-y-0.5 rounded-md bg-surface-2 px-3 py-2 text-[13px] tabular" aria-live="polite">
+    <div className="mt-3 flex min-h-[3.25rem] flex-wrap items-baseline gap-x-4 gap-y-0.5 rounded-md bg-surface-2 px-3 py-2 text-[13px] tabular" aria-hidden="true">
       <span className="font-bold text-ink">{formatDateLong(d.date)}</span>
       {item("終値", d.close === null ? "売買なし" : formatPrice(d.close), "var(--price)")}
       {item("短期線", formatPrice(d.short_ma), "var(--ma-short)")}

@@ -19,9 +19,9 @@ export function linearScale(domain: [number, number], range: [number, number]): 
   return scale;
 }
 
-/** 1・2・2.5・5 × 10^n の「きりのいい」目盛り。 */
-export function niceTicks(min: number, max: number, count = 5): number[] {
-  if (!Number.isFinite(min) || !Number.isFinite(max)) return [];
+/** 1・2・2.5・5 × 10^n の「きりのいい」目盛りと、その間隔(step)。間隔は目盛りの数字の桁数を決めるのに使う。 */
+export function niceScale(min: number, max: number, count = 5): { ticks: number[]; step: number } {
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return { ticks: [], step: 0 };
   if (min === max) {
     const pad = Math.abs(min) * 0.05 || 1;
     min -= pad;
@@ -35,7 +35,12 @@ export function niceTicks(min: number, max: number, count = 5): number[] {
   for (let v = start; v <= max + step * 1e-9; v += step) {
     ticks.push(Number(v.toPrecision(12)));
   }
-  return ticks;
+  return { ticks, step: Number(step.toPrecision(12)) };
+}
+
+/** きりのいい目盛り(niceScale の目盛りだけ)。 */
+export function niceTicks(min: number, max: number, count = 5): number[] {
+  return niceScale(min, max, count).ticks;
 }
 
 /** 目盛りを含むように広げた範囲(上下に少し余白を足す)。 */
@@ -52,18 +57,26 @@ export function paddedExtent(values: Iterable<number>, padRatio = 0.06): [number
   return [min - pad, max + pad];
 }
 
-/** 折れ線のパス。null の点で線を切る(売買不成立の日など)。 */
+/**
+ * 折れ線のパス。null の点で線を切る(売買不成立の日など)。
+ * 前後が null の1点だけの区間は、長さ0の線(h0)にする。stroke-linecap="round" なら点として描かれる。
+ */
 export function linePath(points: ReadonlyArray<readonly [number, number] | null>): string {
   let d = "";
-  let drawing = false;
+  let run = 0; // いまの区間の点の数
+  const close = () => {
+    if (run === 1) d += "h0";
+    run = 0;
+  };
   for (const p of points) {
     if (p === null) {
-      drawing = false;
+      close();
       continue;
     }
-    d += `${drawing ? "L" : "M"}${round(p[0])},${round(p[1])}`;
-    drawing = true;
+    d += `${run > 0 ? "L" : "M"}${round(p[0])},${round(p[1])}`;
+    run += 1;
   }
+  close();
   return d;
 }
 
@@ -84,6 +97,7 @@ export type DateTick = { index: number; label: string; major: boolean };
 
 /**
  * 日付の目盛り。期間が長いときは年の始まりだけ、短いときは四半期や月の始まりに置く。
+ * 月の始まりが2つ未満しかない短い期間(1か月ほど)は、日付を等間隔に置く(「4/15」の形)。
  * dates は "YYYY-MM-DD" の配列(古い順)。
  */
 export function dateTicks(dates: readonly string[], maxTicks = 8): DateTick[] {
@@ -97,24 +111,40 @@ export function dateTicks(dates: readonly string[], maxTicks = 8): DateTick[] {
       previous = ym;
     }
   });
-  const steps = [1, 3, 6, 12];
-  for (const step of steps) {
-    const picked = candidates.filter((c) => (c.month - 1) % step === 0);
-    if (picked.length <= maxTicks) {
-      return picked
-        .filter((c) => c.index > 0 || dates.length === 1)
-        .map((c) => ({
-          index: c.index,
-          label: c.month === 1 ? `${c.year}年` : `${c.month}月`,
-          major: c.month === 1,
-        }));
+  const monthStarts = candidates.filter((c) => c.index > 0);
+  if (monthStarts.length < 2) return dayTicks(dates, Math.min(maxTicks, 5));
+  for (const step of [1, 3, 6, 12]) {
+    const picked = monthStarts.filter((c) => (c.month - 1) % step === 0);
+    if (picked.length <= maxTicks && picked.length > 0) {
+      return picked.map((c) => ({
+        index: c.index,
+        label: c.month === 1 ? `${c.year}年` : `${c.month}月`,
+        major: c.month === 1,
+      }));
     }
   }
-  const years = candidates.filter((c) => c.month === 1);
+  // 年の数も多すぎるときは、何年かおきにする
+  const years = monthStarts.filter((c) => c.month === 1);
   const every = Math.ceil(years.length / maxTicks);
   return years
     .filter((_, i) => i % every === 0)
     .map((c) => ({ index: c.index, label: `${c.year}年`, major: true }));
+}
+
+/** 短い期間の目盛り:最初と最後を除いて、日付を等間隔に置く。 */
+function dayTicks(dates: readonly string[], count: number): DateTick[] {
+  const n = dates.length;
+  if (n < 3) return [];
+  const ticks: DateTick[] = [];
+  const seen = new Set<number>();
+  for (let k = 1; k <= count; k += 1) {
+    const index = Math.round((k * (n - 1)) / (count + 1));
+    if (index <= 0 || index >= n - 1 || seen.has(index)) continue;
+    seen.add(index);
+    const [, m, d] = dates[index].split("-").map(Number);
+    ticks.push({ index, label: `${m}/${d}`, major: false });
+  }
+  return ticks;
 }
 
 /** ピクセル位置に一番近いデータの番号。 */

@@ -1,4 +1,7 @@
-// 手順の表示(銘柄 → 戦略 → 条件 → 確認 → 結果)。終わった手順はクリックで戻れる。
+// 手順の表示(銘柄 → 戦略 → 条件 → 確認 → 結果)。移れる手順はクリックで移れる。
+// 移れるかどうかは lib/flow.ts の canVisit が決める(結果の画面は、いまの条件で出した結果があるときだけ)。
+
+import type { StepId } from "@/lib/flow.ts";
 
 export const STEPS = [
   { id: 1, label: "銘柄" },
@@ -6,17 +9,18 @@ export const STEPS = [
   { id: 3, label: "条件" },
   { id: 4, label: "確認" },
   { id: 5, label: "結果" },
-] as const;
-
-export type StepId = (typeof STEPS)[number]["id"];
+] as const satisfies readonly { id: StepId; label: string }[];
 
 export function Stepper({
   current,
-  reached,
+  isAvailable,
+  locked,
   onSelect,
 }: {
   current: StepId;
-  reached: StepId;
+  isAvailable: (step: StepId) => boolean;
+  /** 計算中など、手順を移れないとき */
+  locked: boolean;
   onSelect: (step: StepId) => void;
 }) {
   return (
@@ -24,8 +28,9 @@ export function Stepper({
       <ol className="flex items-center gap-1 sm:gap-2">
         {STEPS.map((step, index) => {
           const isCurrent = step.id === current;
-          const isDone = step.id < current || (step.id <= reached && !isCurrent);
-          const clickable = step.id <= reached && !isCurrent;
+          const available = !locked && !isCurrent && isAvailable(step.id);
+          // 済んだ手順:いまより前の手順か、いまより先でも移れる(前に進んだことがある)手順
+          const isDone = !isCurrent && (step.id < current || available);
           const circle = isCurrent
             ? "bg-ink text-paper"
             : isDone
@@ -37,10 +42,11 @@ export function Stepper({
                 className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-[13px] font-bold tabular ${circle}`}
                 aria-hidden="true"
               >
-                {isDone && !isCurrent ? "✓" : step.id}
+                {isDone ? "✓" : step.id}
               </span>
+              {/* 狭い画面では、いまの手順以外の名前を隠す(読み上げには残す) */}
               <span
-                className={`text-[14px] ${isCurrent ? "font-bold text-ink" : isDone ? "text-ink-2" : "text-ink-3"} ${isCurrent ? "" : "hidden sm:inline"}`}
+                className={`text-[14px] ${isCurrent ? "font-bold text-ink" : isDone ? "text-ink-2" : "text-ink-3"} ${isCurrent ? "" : "sr-only sm:not-sr-only"}`}
               >
                 {step.label}
               </span>
@@ -48,26 +54,21 @@ export function Stepper({
           );
           return (
             <li key={step.id} className="flex h-9 items-center gap-1 sm:gap-2">
-              {clickable ? (
+              {available ? (
                 <button
                   type="button"
                   onClick={() => onSelect(step.id)}
                   className="flex h-9 items-center gap-2 rounded-full pr-2 leading-none hover:bg-surface"
-                  aria-label={`${step.id}. ${step.label}に戻る`}
+                  aria-label={`${step.id}. ${step.label}${step.id < current ? "に戻る" : "へ進む"}`}
                 >
                   {content}
                 </button>
               ) : (
-                <span
-                  className="flex h-9 items-center gap-2 pr-2 leading-none"
-                  aria-current={isCurrent ? "step" : undefined}
-                >
+                <span className="flex h-9 items-center gap-2 pr-2 leading-none" aria-current={isCurrent ? "step" : undefined}>
                   {content}
                 </span>
               )}
-              {index < STEPS.length - 1 && (
-                <span className="h-px w-3 bg-rule-strong sm:w-6" aria-hidden="true" />
-              )}
+              {index < STEPS.length - 1 && <span className="h-px w-3 bg-rule-strong sm:w-6" aria-hidden="true" />}
             </li>
           );
         })}

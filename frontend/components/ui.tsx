@@ -13,7 +13,8 @@ export function StepHeading({
 }) {
   return (
     <header>
-      <h2 id={id} className="text-[22px] font-bold text-ink sm:text-[26px]">
+      {/* 手順が変わったら、ここにフォーカスを移す(BacktestApp)。読み上げで今の手順が分かるようにするため */}
+      <h2 id={id} data-step-heading tabIndex={-1} className="text-[22px] font-bold text-ink outline-none sm:text-[26px]">
         <span className="sr-only">手順{step}:</span>
         {title}
       </h2>

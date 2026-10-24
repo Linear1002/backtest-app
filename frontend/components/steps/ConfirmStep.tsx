@@ -2,14 +2,15 @@
 
 import { useId } from "react";
 
-import type { EngineInfo, Params, Strategy, SymbolDetail } from "@/lib/api.ts";
-import { describeYen, formatDate } from "@/lib/format.ts";
+import type { BacktestRequest, EngineInfo, Strategy, SymbolDetail } from "@/lib/api.ts";
+import { describeYen, formatDate, formatRatePct, formatYen } from "@/lib/format.ts";
 
 import { Seal } from "../Seal.tsx";
 import { StepHeading } from "../ui.tsx";
 
+// docs/mvp.md 2.4〜2.7・7章の要約(backend/strategies.py の説明文と同じ前提)
 const ASSUMPTIONS = [
-  "当日の終値でシグナルを判定し、次の営業日の始値で約定します(寄付きの成行注文と同じ)。",
+  "当日の終値でシグナルを判定し、次に売買が成立した日(有効日)の始値で約定します(寄付きの成行注文と同じ)。期間の最終日に出たシグナルは約定しません。",
   "買いのみで、空売りはしません。売りのシグナルが出たら全株を売ります。",
   "株数は売買単位の倍数です。資金が足りないときは買わずに見送ります。",
   "移動平均は、その日までに分かる情報だけで分割などを調整した終値で計算します(未来のデータは使いません)。",
@@ -19,38 +20,40 @@ const ASSUMPTIONS = [
 export function ConfirmStep({
   detail,
   strategy,
-  period,
-  params,
+  request,
   engines,
-  engine,
   onEngineChange,
   running,
   error,
+  outdated,
   onRun,
 }: {
   detail: SymbolDetail;
   strategy: Strategy;
-  period: { start_date: string; end_date: string };
-  params: Params;
+  /** この内容で実行する(lib/flow.ts の currentRequest。表示と実行で同じものを使う) */
+  request: BacktestRequest;
   engines: EngineInfo[];
-  engine: string;
   onEngineChange: (id: string) => void;
   running: boolean;
   error: string | null;
+  /** 前に出した結果があり、その条件といまの条件が違う */
+  outdated: boolean;
   onRun: () => void;
 }) {
   const headingId = useId();
+  const params = request.params;
   const rows: [string, string][] = [
-    ["銘柄", `${detail.symbol.name}(${detail.symbol.id})`],
+    ["銘柄", `${detail.symbol.name}(${request.symbol_id})`],
     ["売買ルール", strategy.name],
-    ["期間", `${formatDate(period.start_date)}〜${formatDate(period.end_date)}`],
+    ["期間", `${formatDate(request.start_date)}〜${formatDate(request.end_date)}`],
     ["短期移動平均", `${params.short_window}日`],
     ["長期移動平均", `${params.long_window}日`],
-    ["手数料率", `${params.fee_rate_pct}%`],
-    ["スリッページ率", `${params.slippage_rate_pct}%`],
-    ["初期資金", `${params.initial_cash.toLocaleString("ja-JP")}円(${describeYen(params.initial_cash)})`],
+    ["手数料率", formatRatePct(params.fee_rate_pct)],
+    ["スリッページ率", formatRatePct(params.slippage_rate_pct)],
+    ["初期資金", `${formatYen(params.initial_cash)}(${describeYen(params.initial_cash)})`],
     ["売買単位", `${detail.market.lot_size}株`],
   ];
+  const engine = request.engine;
 
   return (
     <section aria-labelledby={headingId}>
@@ -103,7 +106,7 @@ export function ConfirmStep({
                 name="engine"
                 value={e.id}
                 checked={engine === e.id}
-                disabled={!e.available}
+                disabled={!e.available || running}
                 onChange={() => onEngineChange(e.id)}
                 className="mt-1.5 accent-[var(--ink)]"
               />
@@ -115,6 +118,12 @@ export function ConfirmStep({
           ))}
         </div>
       </fieldset>
+
+      {outdated && !running && (
+        <p className="mt-6 text-[13px] leading-6 text-ink-2">
+          ※ 前に出した結果とは条件が違います。実行すると、この条件の新しい結果になります。
+        </p>
+      )}
 
       {error && (
         <p role="alert" className="mt-6 rounded-md border border-shu px-4 py-3 text-[14px] text-shu">
@@ -129,7 +138,7 @@ export function ConfirmStep({
           disabled={running}
           className="inline-flex items-center gap-3 rounded-md bg-ink py-2.5 pl-3 pr-6 text-[16px] font-bold text-paper hover:opacity-90 disabled:cursor-wait disabled:opacity-60"
         >
-          <Seal kind="check" size={26} title="検証" />
+          <Seal kind="check" size={26} decorative />
           {running ? "計算しています…" : "バックテストを実行"}
         </button>
       </div>
