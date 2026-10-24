@@ -5,6 +5,8 @@ Next.js(TypeScript・Tailwind CSS・App Router)の画面。起動方法などは
 - 開発サーバー:リポジトリ直下で `make dev-api`(API)と `make dev-web`(画面)→ http://localhost:3000
 - 画面からの `/api/...` は `next.config.ts` の rewrites で FastAPI(既定は http://localhost:8000、環境変数 `BACKEND_URL` で変更可)に転送する
 - テスト:`npm test`(`lib/` の計算・表示の関数。Node.js の test runner で TypeScript をそのまま動かす)
+- 通しのテスト:リポジトリ直下で `make e2e`(画面を本番ビルドし、Playwright で画面〜API〜エンジンを通して確かめる。架空データだけを使う。
+  初めてのときは `npx playwright install --with-deps chromium` でブラウザを入れる。設定は `playwright.config.ts`)
 - デザインの決まりごと:`DESIGN.md`
 - `AGENTS.md` は `next dev` が自動で書き戻すファイルなので、消さずにコミットしておく
 
@@ -21,7 +23,8 @@ Next.js(TypeScript・Tailwind CSS・App Router)の画面。起動方法などは
 | `lib/format.ts` | 円・%・日付の表示 |
 | `lib/chart.ts` | チャートの目盛り・座標・線のパス |
 | `lib/form.ts` | 条件の入力チェック(範囲は API の ParamSpec から読む。メッセージは docs/mvp.md 4.3・API と同じ) |
-| `lib/testing.ts` | テスト用の小さなデータ(アプリからは使わない) |
+| `lib/testing.ts` | テスト用の小さなデータ(アプリからは使わない)。パラメータの定義は API と共有する `tests/fixtures/` から読む |
+| `e2e/` | 画面〜API〜エンジンを通すテスト(Playwright)。各手順でアクセシビリティの自動チェック(axe)もする |
 
 ## 状態の決まり(lib/flow.ts)
 
@@ -30,6 +33,7 @@ Next.js(TypeScript・Tailwind CSS・App Router)の画面。起動方法などは
 
 - **古い応答は捨てる**:銘柄の詳細・バックテストの実行には番号を付け、いちばん新しい番号の応答だけを受け取る(A を押してすぐ B を押したとき、遅れて届いた A の詳細で B の条件を上書きしない)
 - **結果は、その結果を出した条件でだけ見られる**:条件を変えたら手順5には移れない(元の条件に戻せば、また見られる)
-- **実行中は手順を移れない**
+- **実行中は、手順の移動・条件の変更・銘柄の選び直しを受け付けない**(送ったリクエストと画面の条件をずらさないため)
+- **API のエラーは、出せる場所に出す**:入力欄のエラー(期間・日数など)は条件の画面のその欄へ。それ以外は確認の画面に文で出す
 - **手順が変わったら見出しへ、入力に誤りがあれば最初の誤りの欄へフォーカスを移す**(読み上げ・キーボード操作のため)
 - **同じ銘柄を選び直しても何も消さない**。別の銘柄にしたら、日数・費用・初期資金は残し、期間だけを新しい銘柄のデータの範囲にする
