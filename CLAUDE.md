@@ -78,6 +78,7 @@
 | `make setup` | 依存のインストール(uv sync / npm ci)と CMake の設定。最初と、依存が変わったときに実行 |
 | `make test` | C++ のビルド → pytest → ctest(GoogleTest)→ 画面の関数のテスト(`npm test`) |
 | `make lint` | ruff check / ruff format --check / ESLint |
+| `make e2e` | 画面を本番ビルドし、Playwright で画面〜API〜エンジンを通しでテスト(架空データ。初回は `cd frontend && npx playwright install --with-deps chromium`) |
 | `make dev-api` | API サーバー起動 → http://localhost:8000/api/health 、API ドキュメント http://localhost:8000/docs |
 | `make dev-web` | 画面の開発サーバー起動 → http://localhost:3000 |
 | `make data-symbols` | J-Quants の銘柄一覧を取得して保存(APIキーが必要。docs/data.md) |

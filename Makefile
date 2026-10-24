@@ -2,7 +2,7 @@
 
 BUILD_DIR := build
 
-.PHONY: setup test lint dev-api dev-web data-symbols data-fetch data-info data-check golden test-cpp cpp-case
+.PHONY: setup test lint e2e dev-api dev-web data-symbols data-fetch data-info data-check golden test-cpp cpp-case
 
 # 依存ライブラリのインストールと C++ のビルド設定(最初に1回、依存が変わったときに実行)
 # --locked:uv.lock を勝手に書き換えない(CI と同じ)。依存を変えるときは uv add / uv lock を使う
@@ -27,6 +27,14 @@ lint:
 	uv run ruff check .
 	uv run ruff format --check .
 	npm --prefix frontend run lint
+
+# 画面〜API〜エンジンを通すテスト(Playwright。架空データだけを使う)。画面を本番ビルドしてから動かす
+# API と画面のサーバーは Playwright が起動する(:8000・:3000 ですでに動いていれば、それを使う。
+# make dev-web の開発サーバーが動いていると本番ビルドではなくそちらで試すので、止めてから実行する)
+# 初めてのときは cd frontend && npx playwright install --with-deps chromium でブラウザを入れる
+e2e:
+	npm --prefix frontend run build
+	npm --prefix frontend run e2e
 
 # API サーバー(http://localhost:8000)
 dev-api:
