@@ -58,9 +58,20 @@ class EngineOut(_Model):
     note: str
 
 
+class SweepEngineOut(_Model):
+    id: str
+    label: str
+    available: bool
+    note: str
+    max_pairs: int = Field(description="このエンジンで計算できる組み合わせの数の上限")
+
+
 class MetaOut(_Model):
     data_sources: list[DataSourceOut]
     engines: list[EngineOut]
+    sweep_engines: list[SweepEngineOut] = Field(
+        description="総当たりに使えるエンジン(docs/sweep.md)"
+    )
     trading_days_per_year: int
 
 
@@ -228,6 +239,9 @@ class NoteOut(_Model):
         "execution_assumption",
         "data_license",
         "stale_data",
+        "trials",
+        "selection_bias",
+        "no_holdout",
     ]
     message: str
 
@@ -319,3 +333,144 @@ class BacktestOut(_Model):
     )
     data_info: DataInfoOut
     elapsed_ms: float = Field(description="計算にかかった時間(ミリ秒)")
+
+
+# --- 総当たり(docs/sweep.md):入力 -------------------------------------------------
+
+
+class SweepGridIn(_Model):
+    """短期日数 × 長期日数の格子。整数かどうか・範囲のチェックは、日本語のメッセージを出すために API 側で行う。"""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    short_min: float = Field(3, description="短期日数の最小(1以上1000以下の整数)")
+    short_max: float = Field(30, description="短期日数の最大")
+    short_step: float = Field(3, description="短期日数の刻み")
+    long_min: float = Field(20, description="長期日数の最小")
+    long_max: float = Field(120, description="長期日数の最大")
+    long_step: float = Field(10, description="長期日数の刻み")
+
+
+class SweepCostsIn(_Model):
+    """全組み合わせで共通の費用と資金。率は %。"""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    fee_rate_pct: float = Field(0.1, description="手数料率(%)。0以上10未満")
+    slippage_rate_pct: float = Field(0.05, description="スリッページ率(%)。0以上10未満")
+    initial_cash: float = Field(1_000_000, description="初期資金(円)。1円以上10億円以下")
+
+
+class SweepRequest(_Model):
+    symbol_id: str = Field(examples=["DEMO:1003"], max_length=32)
+    strategy_id: str = Field("ma_cross", max_length=64)
+    engine: str = Field(
+        "python",
+        description="総当たりに使うエンジン(GET /api/meta の sweep_engines)",
+        max_length=32,
+    )
+    start_date: dt.date | None = Field(None, description="省略するとデータの最初の日")
+    end_date: dt.date | None = Field(None, description="省略するとデータの最後の日")
+    holdout_start_date: dt.date | None = Field(
+        None,
+        description="検証期間(アウトオブサンプル)の開始日。省略すると検証期間なし(docs/sweep.md 3章)",
+    )
+    grid: SweepGridIn = SweepGridIn()
+    params: SweepCostsIn = SweepCostsIn()
+
+
+# --- 総当たり:出力 ------------------------------------------------------------------
+
+
+class SegmentOut(_Model):
+    name: Literal["in_sample", "out_of_sample"] = Field(
+        description="in_sample は選ぶ期間、out_of_sample は検証期間"
+    )
+    start_date: dt.date
+    end_date: dt.date
+    first_business_day: dt.date
+    last_business_day: dt.date
+    business_days: int
+
+
+class SweepGridOut(_Model):
+    short_min: int
+    short_max: int
+    short_step: int
+    long_min: int
+    long_max: int
+    long_step: int
+    short_values: list[int]
+    long_values: list[int]
+
+
+class SweepParamsOut(_Model):
+    fee_rate_pct: float
+    slippage_rate_pct: float
+    fee_rate: float
+    slippage_rate: float
+    initial_cash: float
+    lot_size: int
+    trading_days_per_year: int
+
+
+class SweepMetricsOut(_Model):
+    """1つの期間の成績(docs/mvp.md 5章と同じ定義)。null は算出不可・「−」。"""
+
+    total_return: float
+    annualized_return: float | None
+    max_drawdown: float
+    sharpe_ratio: float | None
+    win_rate: float | None
+    trade_count: int
+    winning_trades: int
+    return_count: int
+    insufficient_cash_count: int
+    final_equity: float
+
+
+class ComboOut(_Model):
+    short_window: int
+    long_window: int
+    in_sample: SweepMetricsOut
+    out_of_sample: SweepMetricsOut | None
+
+
+class RankingOut(_Model):
+    """1つの基準で並べた結果(docs/sweep.md 7章)。位置は combos の中の位置。"""
+
+    objective: Literal["sharpe_ratio", "total_return", "max_drawdown"]
+    order: list[int] = Field(description="選ぶ期間の成績のよい順")
+    best_index: int | None
+    best_out_of_sample_rank: int | None = Field(description="1位の組み合わせの、検証期間での順位")
+    out_of_sample_ranked: int = Field(description="検証期間の値がある組み合わせの数")
+    rank_correlation: float | None = Field(description="選ぶ期間と検証期間の順位相関(スピアマン)")
+    correlation_pairs: int
+    neighbors_mean: float | None = Field(
+        description="1位のとなりの組み合わせの、選ぶ期間の値の平均"
+    )
+    neighbors_count: int
+
+
+class SweepResultOut(_Model):
+    symbol: SymbolOut
+    strategy_id: str
+    engine: SweepEngineOut
+    segments: list[SegmentOut]
+    grid: SweepGridOut
+    params: SweepParamsOut
+    count: int = Field(description="試した組み合わせの数")
+    combos: list[ComboOut]
+    rankings: list[RankingOut]
+    notes: list[NoteOut]
+    data_info: DataInfoOut
+
+
+class SweepStatusOut(_Model):
+    id: str
+    status: Literal["running", "done", "failed", "cancelled"]
+    done: int = Field(description="計算が終わった組み合わせの数")
+    total: int = Field(description="組み合わせの数")
+    elapsed_ms: float | None = Field(description="計算にかかった時間(終わったときだけ)")
+    result: SweepResultOut | None = None
+    error: ErrorResponse | None = None

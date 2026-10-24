@@ -90,6 +90,60 @@ def list_engines() -> list[EngineInfo]:
     ]
 
 
+# --- 総当たり(docs/sweep.md)に使うエンジン -------------------------------------------
+
+PYTHON_SWEEP_MAX_PAIRS = 2_000  # docs/sweep.md 9章
+FAST_SWEEP_MAX_PAIRS = 20_000
+
+
+@dataclass(frozen=True)
+class SweepEngineInfo:
+    id: str
+    label: str
+    available: bool
+    note: str
+    max_pairs: int
+
+
+def list_sweep_engines(workers: int) -> list[SweepEngineInfo]:
+    """総当たりに使えるエンジン。C++ 版・CUDA 版の総当たりは、開発者が書いたらここでつなぐ(docs/gpu-plan.md)。"""
+    return [
+        SweepEngineInfo(
+            "python",
+            "Python リファレンス実装",
+            True,
+            f"{workers}個のプロセスで並列に計算します。1つの組み合わせに数十ミリ秒かかります",
+            PYTHON_SWEEP_MAX_PAIRS,
+        ),
+        SweepEngineInfo(
+            "cpp",
+            "C++ CPU 版",
+            False,
+            "まだありません(docs/gpu-plan.md の G2)",
+            FAST_SWEEP_MAX_PAIRS,
+        ),
+        SweepEngineInfo(
+            "cuda",
+            "CUDA 版(GPU)",
+            False,
+            "まだありません(docs/gpu-plan.md の G3〜G6)",
+            FAST_SWEEP_MAX_PAIRS,
+        ),
+    ]
+
+
+def get_sweep_engine(engine_id: str, workers: int) -> SweepEngineInfo:
+    """総当たりに使うエンジン。知らない・使えないエンジンなら EngineUnavailableError。"""
+    for engine in list_sweep_engines(workers):
+        if engine.id == engine_id:
+            if not engine.available:
+                raise EngineUnavailableError(
+                    f"総当たりでは {engine.label} はまだ使えません。{engine.note}"
+                )
+            return engine
+    raise EngineUnavailableError(f"知らないエンジンです: {engine_id}")
+
+
 def get_engine(engine_id: str) -> RunFunction:
     if engine_id == "python":
         return run_backtest

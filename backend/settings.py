@@ -28,6 +28,7 @@ class Settings:
     jquants_requests_per_minute: int = 5
     jquants_max_age_days: int = 7
     cors_origins: tuple[str, ...] = ("http://localhost:3000", "http://127.0.0.1:3000")
+    sweep_workers: int | None = None  # 総当たりに使うプロセスの数(None は CPU のコアの数)
 
     @property
     def jquants_configured(self) -> bool:
@@ -65,6 +66,7 @@ def load_settings(*, env_file: Path | None = None) -> Settings:
         jquants_api_key=_env("JQUANTS_API_KEY"),
         jquants_requests_per_minute=_positive_int("JQUANTS_REQUESTS_PER_MINUTE", 5),
         jquants_max_age_days=_positive_int("JQUANTS_MAX_AGE_DAYS", 7),
+        sweep_workers=_positive_int("BACKTEST_SWEEP_WORKERS", 0) or None,
         cors_origins=tuple(o.strip() for o in origins.split(",") if o.strip())
         if origins
         else Settings.cors_origins,

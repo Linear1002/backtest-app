@@ -7,7 +7,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request
 
-from backend.api import convert
+from backend.api import convert, sweep_convert
 from backend.api.schemas import (
     BacktestOut,
     BacktestRequest,
@@ -23,14 +23,26 @@ from backend.api.schemas import (
     PeriodOut,
     StrategyListOut,
     StrategyOut,
+    SweepEngineOut,
+    SweepRequest,
+    SweepStatusOut,
     SymbolDetailOut,
     SymbolListOut,
 )
-from backend.api.validation import InputValidationError, validate_params, validate_period
-from backend.engines import get_engine, list_engines
+from backend.api.validation import (
+    InputValidationError,
+    validate_holdout,
+    validate_params,
+    validate_period,
+    validate_sweep_inputs,
+)
+from backend.engines import get_engine, get_sweep_engine, list_engines, list_sweep_engines
 from backend.marketdata.models import SymbolId
 from backend.marketdata.service import MarketDataService
 from backend.strategies import STRATEGIES, STRATEGIES_BY_ID
+from backend.sweeps import INTERNAL_ERROR as SWEEP_INTERNAL_ERROR
+from backend.sweeps import SweepJob, SweepJobs, SweepSpec
+from engine.reference.sweep import validate_sweep
 from engine.reference.types import TRADING_DAYS_PER_YEAR
 
 router = APIRouter(prefix="/api")
@@ -49,6 +61,17 @@ def get_service(request: Request) -> MarketDataService:
 Service = Annotated[MarketDataService, Depends(get_service)]
 
 
+def get_sweeps(request: Request) -> SweepJobs:
+    return request.app.state.sweeps
+
+
+Sweeps = Annotated[SweepJobs, Depends(get_sweeps)]
+
+
+class SweepNotFoundError(LookupError):
+    """知らない(または消えた)総当たりのジョブ。メッセージは画面に出せる日本語。"""
+
+
 @router.get("/health")
 def health() -> dict[str, str]:
     """サーバーが起動しているかの確認用。"""
@@ -56,7 +79,7 @@ def health() -> dict[str, str]:
 
 
 @router.get("/meta", response_model=MetaOut)
-def meta(service: Service) -> MetaOut:
+def meta(service: Service, sweeps: Sweeps) -> MetaOut:
     """使えるデータソースとエンジン。"""
     sources = [
         DataSourceOut(
@@ -71,6 +94,7 @@ def meta(service: Service) -> MetaOut:
     return MetaOut(
         data_sources=sources,
         engines=[EngineOut(**vars(e)) for e in list_engines()],
+        sweep_engines=[SweepEngineOut(**vars(e)) for e in list_sweep_engines(sweeps.workers)],
         trading_days_per_year=TRADING_DAYS_PER_YEAR,
     )
 
@@ -207,3 +231,99 @@ def run_backtest_endpoint(body: BacktestRequest, service: Service) -> BacktestOu
         data_info=convert.data_info_out(data.info),
         elapsed_ms=elapsed_ms,
     )
+
+
+# --- 総当たり(docs/sweep.md) ----------------------------------------------------------
+
+SWEEP_RESPONSES = {
+    **ERROR_RESPONSES,
+    409: {"model": ErrorResponse, "description": "ほかの総当たりを計算している"},
+}
+SWEEP_NOT_FOUND = (
+    "その総当たりは見つかりません。終わってから30分たったか、API サーバーを起動し直した可能性があります。"
+    "もう一度実行してください"
+)
+
+
+def sweep_status_out(job: SweepJob) -> SweepStatusOut:
+    with job.lock:
+        error = None
+        if job.status == "failed":
+            if job.error_kind == "data":
+                detail = f"データに異常があるため計算できません:{job.error_message}"
+            elif job.error_kind == "input":
+                detail = job.error_message or "入力内容を確認してください"
+            else:
+                detail = job.error_message or SWEEP_INTERNAL_ERROR
+            error = ErrorResponse(detail=detail, errors=[])
+        return SweepStatusOut(
+            id=job.id,
+            status=job.status,
+            done=job.done,
+            total=job.total,
+            elapsed_ms=job.elapsed_seconds * 1000 if job.elapsed_seconds is not None else None,
+            result=job.output if job.status == "done" else None,
+            error=error,
+        )
+
+
+@router.post("/sweeps", status_code=202, response_model=SweepStatusOut, responses=SWEEP_RESPONSES)
+def start_sweep(body: SweepRequest, service: Service, sweeps: Sweeps) -> SweepStatusOut:
+    """総当たりを始める(すぐに返る)。途中経過と結果は GET /api/sweeps/{id} で受け取る。"""
+    strategy = STRATEGIES_BY_ID.get(body.strategy_id)
+    if strategy is None or not strategy.available:
+        raise InputValidationError(
+            [ErrorItem(field="strategy_id", message="この戦略はまだ使えません")]
+        )
+    engine = get_sweep_engine(body.engine, sweeps.workers)  # 使えなければ EngineUnavailableError
+    sid = SymbolId.parse(body.symbol_id)
+    grid, costs = validate_sweep_inputs(body.grid, body.params, sid.market_config, engine.max_pairs)
+
+    source = service.source_for(sid)
+    service.require_listed(sid)
+    data = service.load(sid)
+    period = validate_period(body.start_date, body.end_date, data.available, data.bars)
+    holdout = validate_holdout(body.holdout_start_date, period, data.bars)
+    bars = convert.to_engine_bars(data.bars)
+    # エンジンのチェック(データの異常など。docs/sweep.md 5章)は、計算を始める前にここで行う
+    pairs, segments = validate_sweep(bars, period.start, period.end, grid, costs, holdout)
+
+    context = sweep_convert.SweepContext(
+        symbol=convert.symbol_out(
+            service.find_symbol(sid), source.source_id, service.describe(sid)
+        ),
+        strategy_id=strategy.id,
+        engine=SweepEngineOut(**vars(engine)),
+        market=sid.market,
+        data_info=data.info,
+        grid=grid,
+        costs=costs,
+        fee_rate_pct=body.params.fee_rate_pct,
+        slippage_rate_pct=body.params.slippage_rate_pct,
+        segments=sweep_convert.segments_out(segments, data.bars),
+    )
+    spec = SweepSpec(tuple(bars), segments, costs, tuple(pairs), context)
+
+    def on_done(job: SweepJob) -> None:
+        assert job.rows is not None
+        job.output = sweep_convert.result_out(context, spec.pairs, job.rows)
+
+    return sweep_status_out(sweeps.start(spec, on_done=on_done))
+
+
+@router.get("/sweeps/{sweep_id}", response_model=SweepStatusOut, responses=SWEEP_RESPONSES)
+def get_sweep(sweep_id: str, sweeps: Sweeps) -> SweepStatusOut:
+    """総当たりの途中経過。終わっていれば結果も返す。"""
+    job = sweeps.get(sweep_id)
+    if job is None:
+        raise SweepNotFoundError(SWEEP_NOT_FOUND)
+    return sweep_status_out(job)
+
+
+@router.delete("/sweeps/{sweep_id}", response_model=SweepStatusOut, responses=SWEEP_RESPONSES)
+def cancel_sweep(sweep_id: str, sweeps: Sweeps) -> SweepStatusOut:
+    """総当たりを中止する(すでに終わっていれば何もしない)。"""
+    job = sweeps.cancel(sweep_id)
+    if job is None:
+        raise SweepNotFoundError(SWEEP_NOT_FOUND)
+    return sweep_status_out(job)

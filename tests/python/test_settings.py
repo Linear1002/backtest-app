@@ -14,6 +14,7 @@ VARIABLES = (
     "JQUANTS_MAX_AGE_DAYS",
     "BACKTEST_DATA_DIR",
     "BACKTEST_CORS_ORIGINS",
+    "BACKTEST_SWEEP_WORKERS",
 )
 
 
@@ -44,13 +45,15 @@ def test_empty_values_from_env_example_mean_default(tmp_path: Path) -> None:
     assert settings.jquants_requests_per_minute == 5
     assert settings.jquants_max_age_days == 7
     assert settings.data_dir.name == "data"
+    assert settings.sweep_workers is None  # 空欄なら CPU のコアの数
 
 
 def test_values_are_read(tmp_path: Path) -> None:
     env = write_env(
         tmp_path,
         "JQUANTS_API_KEY=abc\nJQUANTS_REQUESTS_PER_MINUTE=60\nJQUANTS_MAX_AGE_DAYS= 3 \n"
-        f"BACKTEST_DATA_DIR={tmp_path / 'store'}\nBACKTEST_CORS_ORIGINS=http://a:1, http://b:2\n",
+        f"BACKTEST_DATA_DIR={tmp_path / 'store'}\nBACKTEST_CORS_ORIGINS=http://a:1, http://b:2\n"
+        "BACKTEST_SWEEP_WORKERS=3\n",
     )
     settings = load_settings(env_file=env)
     assert settings.jquants_configured
@@ -58,6 +61,7 @@ def test_values_are_read(tmp_path: Path) -> None:
     assert settings.jquants_max_age_days == 3
     assert settings.data_dir == tmp_path / "store"
     assert settings.cors_origins == ("http://a:1", "http://b:2")
+    assert settings.sweep_workers == 3
 
 
 @pytest.mark.parametrize("value", ["abc", "0", "-1", "1.5"])
