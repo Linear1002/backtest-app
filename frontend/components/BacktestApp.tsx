@@ -13,6 +13,7 @@ import {
   resultIsOutdated,
   runErrorMessage,
   selectedStrategy,
+  unplacedErrorMessage,
   type FlowState,
   type StepId,
 } from "@/lib/flow.ts";
@@ -91,7 +92,10 @@ export function BacktestApp() {
       const result = await api.runBacktest(request);
       dispatch({ type: "runSucceeded", id, result });
     } catch (e: unknown) {
-      dispatch({ type: "runFailed", id, message: runErrorMessage(e, request), fieldErrors: fieldErrorsFrom(e, request) });
+      const fieldErrors = fieldErrorsFrom(e, request);
+      // 欄に出せる誤りがあるときは、欄に出せない誤りの文だけを画面の上に出す(なければ出さない)
+      const message = Object.keys(fieldErrors).length > 0 ? unplacedErrorMessage(e, request) : runErrorMessage(e, request);
+      dispatch({ type: "runFailed", id, message, fieldErrors });
     }
   }
 
@@ -176,6 +180,7 @@ export function BacktestApp() {
               specs={strategy.params}
               form={state.form}
               errors={state.fieldErrors}
+              notice={state.runError}
               onChange={(form) => dispatch({ type: "editForm", form })}
               onNext={() => dispatch({ type: "submitParams" })}
             />

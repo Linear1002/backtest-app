@@ -77,7 +77,8 @@ export type FlowAction =
   | { type: "selectEngine"; id: string }
   | { type: "runStarted"; id: number; request: BacktestRequest }
   | { type: "runSucceeded"; id: number; result: BacktestResult }
-  | { type: "runFailed"; id: number; message: string; fieldErrors: FieldErrors }
+  /** message:確認の画面(欄の誤りがあるときは条件の画面)に出す文。欄に出せる誤りだけのときは null */
+  | { type: "runFailed"; id: number; message: string | null; fieldErrors: FieldErrors }
   | { type: "resultAnimated"; id: number };
 
 export const initialFlow: FlowState = {
@@ -226,6 +227,17 @@ export function runErrorMessage(error: unknown, request: BacktestRequest): strin
   return extras.length ? `${base}(${extras.join("・")})` : base;
 }
 
+/**
+ * 欄に出せる誤りと一緒に返ってきた、欄に出せない誤り(戦略・エンジンなど)の文。なければ null。
+ * 条件の画面に戻るときに、欄の誤りとは別に画面の上に出す。
+ */
+export function unplacedErrorMessage(error: unknown, request: BacktestRequest): string | null {
+  if (!(error instanceof ApiError)) return null;
+  const known = formFields(request);
+  const hasUnplaced = error.errors.some((e) => e.field !== null && !known.has(e.field) && e.message);
+  return hasUnplaced ? runErrorMessage(error, request) : null;
+}
+
 // --- 状態の移り変わり(reducer) ---------------------------------------------------
 
 function focus(state: FlowState, target: FocusRequest["target"]): FocusRequest {
@@ -242,15 +254,41 @@ function moveTo(state: FlowState, step: StepId): FlowState {
   };
 }
 
-/** 入力が変わった項目のエラーだけを消す(ほかの欄のエラーは、直すまで残す)。 */
-function clearChangedErrors(errors: FieldErrors, before: FormState | null, after: FormState): FieldErrors {
+/** 2つの欄にまたがる誤りがある組(短期と長期、開始日と終了日)。誤りは片方の欄に出る。 */
+const PARTNER: Partial<Record<keyof FieldErrors, keyof FieldErrors>> = {
+  short_window: "long_window",
+  long_window: "short_window",
+  start_date: "end_date",
+  end_date: "start_date",
+};
+
+function fieldValue(form: FormState | null, key: keyof FieldErrors): string | undefined {
+  if (!form) return undefined;
+  return key === "start_date" || key === "end_date" ? form[key] : form.params[key];
+}
+
+/**
+ * 入力が変わったときに、もう当てはまらないエラーを消す(まだ当てはまるものは、直すまで残す)。
+ * - その欄の入力が変わったら、その欄のエラーは消す
+ * - 組の相手の欄が変わったら、いまの入力でもう一度確かめて、同じ誤りが出なければ消す
+ *   (例:長期を長くして「短期 < 長期」になったら、短期の欄の「短期は長期より小さく」を消す)
+ */
+function clearChangedErrors(
+  errors: FieldErrors,
+  before: FormState | null,
+  after: FormState,
+  recheck: FieldErrors,
+): FieldErrors {
   const next: FieldErrors = { ...errors };
   for (const key of Object.keys(next) as (keyof FieldErrors)[]) {
-    const changed =
-      key === "start_date" || key === "end_date"
-        ? before?.[key] !== after[key]
-        : before?.params[key] !== after.params[key];
-    if (changed) delete next[key];
+    if (fieldValue(before, key) !== fieldValue(after, key)) {
+      delete next[key];
+      continue;
+    }
+    const partner = PARTNER[key];
+    if (partner && fieldValue(before, partner) !== fieldValue(after, partner) && recheck[key] !== next[key]) {
+      delete next[key];
+    }
   }
   return next;
 }
@@ -271,9 +309,17 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
   switch (action.type) {
     case "catalogLoaded": {
       const next = { ...state, catalog: { meta: action.meta, strategies: action.strategies }, catalogError: null };
-      // 選んでいた戦略が一覧にない・使えない(一覧が変わった)ときは、最初の使える戦略にする
+      // 実行中は、選んでいる戦略や入力欄を変えない(送ったリクエストと画面の条件をずらさないため)
+      if (state.running) return next;
+      // 選んでいた戦略が一覧にない・使えない(一覧が変わった)ときは、最初の使える戦略にする。
+      // 戦略が変わったらパラメータの項目も変わるので、期間だけを残して入力欄を作り直す
       if (!usableStrategy(next)) {
         next.strategyId = action.strategies.find((s) => s.available)?.id ?? null;
+        const nextSpecs = specsOf(next);
+        if (next.strategyId !== state.strategyId && state.form && nextSpecs) {
+          next.form = defaultForm(nextSpecs, { first_date: state.form.start_date, last_date: state.form.end_date });
+          next.fieldErrors = {};
+        }
       }
       // 詳細を先に受け取っていたら、ここで入力欄の初期値を作る
       const specs = specsOf(next);
@@ -351,7 +397,12 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
       return {
         ...state,
         form: action.form,
-        fieldErrors: clearChangedErrors(state.fieldErrors, state.form, action.form),
+        fieldErrors: clearChangedErrors(
+          state.fieldErrors,
+          state.form,
+          action.form,
+          formErrors({ ...state, form: action.form }),
+        ),
         runError: null,
       };
 
@@ -384,11 +435,12 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
       if (!state.running || state.running.id !== action.id) return state;
       const stopped = { ...state, running: null };
       if (Object.keys(action.fieldErrors).length > 0) {
-        // 条件の入力に問題があれば、条件の画面に戻ってその場所に表示する
+        // 条件の入力に問題があれば、条件の画面に戻ってその場所に表示する。
+        // 欄に出せない誤りも一緒に返ってきたら、その文(message)を条件の画面の上に出す
         const back = moveTo(stopped, 3);
-        return { ...back, fieldErrors: action.fieldErrors, focus: focus(back, "error") };
+        return { ...back, fieldErrors: action.fieldErrors, runError: action.message, focus: focus(back, "error") };
       }
-      return { ...stopped, runError: action.message };
+      return { ...stopped, runError: action.message ?? "バックテストを実行できませんでした" };
     }
 
     case "resultAnimated":
