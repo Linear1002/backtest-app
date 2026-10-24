@@ -119,8 +119,9 @@ Python で書いた「正解」。遅くてよいので、仕様の文と1対1�
 |---|---|---|
 | `tests/python/test_reference_*.py` | エンジンの手計算のケース、性質のテスト(未来のデータを書き換えても過去のシグナルが変わらない、など) | `uv run pytest` |
 | `tests/python/test_api.py` ほか | API・入力チェック・データ層・設定 | 同上 |
-| `tests/fixtures/` + `test_param_contract.py` | 画面と API で共有する表:パラメータの定義(`ma_cross_params.json`)と、入力 → メッセージ(`param_messages.json`)。画面のテスト(`lib/form.test.ts`)も同じ表を読むので、片方だけ変えるとどちらかが落ちる | 同上 |
+| `tests/fixtures/` + `test_param_contract.py` | 画面と API で共有する表:パラメータの定義(`ma_cross_params.json`)と、入力 → メッセージ(`param_messages.json`・`period_messages.json`・`sweep_messages.json`)。画面のテスト(`lib/form.test.ts`・`lib/sweep.test.ts`)も同じ表を読むので、片方だけ変えるとどちらかが落ちる | 同上 |
 | `tests/golden/` + `test_golden.py` | 正解データ(60ケース)。リファレンスがビット単位で再現すること(`make test` の pytest で動く)、C++ 版があれば一致すること(`make test-cpp`) | `make test`・`make test-cpp` |
+| `tests/golden/sweeps/` + `test_golden_sweep.py` | 総当たりの正解データ(14ケース。9章) | 同上 |
 | `tests/cpp/` | C++ のビルド確認(C++ 版のテストは `engine/cpp/tests/` に自分で書く) | `ctest --test-dir build` |
 | `frontend/lib/*.test.ts` | 画面の状態遷移・入力チェック・目盛り・表示 | `npm --prefix frontend test` |
 | `frontend/e2e/` | 画面〜API〜エンジンを通しで(架空データ)。各手順でアクセシビリティの自動チェック | `make e2e` |
@@ -141,3 +142,46 @@ Python で書いた「正解」。遅くてよいので、仕様の文と1対1�
 - `make dev-web` → 画面で `DEMO:1004`(1:3分割)を全期間で実行し、取引の記録の「100株 → 300株」を見つける。なぜ売値が買値より安いのに利益なのかを説明してみる
 - `frontend/lib/flow.test.ts` を1つ読み、似たテストを1つ足してみる(`npm --prefix frontend test`)
 - `uv run python -m engine.reference.cli tests/golden/cases/h01_round_trip/input /tmp/out` を動かして、`uv run python -m engine.reference.compare tests/golden/cases/h01_round_trip/expected /tmp/out` で正解と比べる
+
+## 9. 総当たり(パラメータの探索)の流れ
+
+仕様は `docs/sweep.md`(このガイドでは「総当たり 3章」のように書く)。1つ1つの組み合わせの計算は、1回のバックテストとまったく同じ。
+違うのは「組み合わせが多い」「時間がかかる」「1位を正直に見せる」の3つで、それぞれ次のファイルが受け持つ。
+
+```mermaid
+flowchart LR
+  P["ParamsStep.tsx<br/>格子・検証期間"] --> SC["SweepConfirmStep.tsx<br/>確認・途中経過・中止"]
+  SC -- "POST /api/sweeps" --> RT["routes.py<br/>start_sweep"]
+  RT --> JOB["sweeps.py<br/>ジョブ・プロセス"]
+  JOB --> RS["engine/reference/sweep.py<br/>run_pairs"]
+  SC -- "GET /api/sweeps/{id}<br/>(400ミリ秒ごと)" --> RT
+  JOB --> SUM["sweep_summary.py<br/>順位・順位相関"]
+  SUM --> CV["sweep_convert.py<br/>JSON・注記"]
+  CV --> V["SweepView.tsx<br/>まとめ・ヒートマップ"]
+```
+
+| ファイル | 役割 | 読むときのポイント |
+|---|---|---|
+| `engine/reference/sweep.py` | **総当たりの正解**。格子(`validate_grid`)、期間の分け方(`split_segments`)、チェックの順番(`validate_sweep`)、組み合わせを順番に `run_backtest` する(`run_pairs`) | 検証期間は持ち越しなしで最初から計算する。ウォームアップには選ぶ期間の株価を使う(その日までに分かる値なので先読みではない。総当たり 3章) |
+| `backend/sweeps.py` | ジョブ。組み合わせを小分けにして `ProcessPoolExecutor` に配り、終わった分から数える。中止・同時に2つまで・問い合わせが60秒来なければ打ち切る・終わって30分で消す | 計算はプロセス、見張りはスレッド、リクエストは別のスレッド。共有する値は `job.lock` の中でだけ読み書きする |
+| `backend/sweep_summary.py` | 並べ方(選ぶ期間だけで順位を付ける)・検証期間での順位・スピアマンの順位相関・1位のとなりの平均 | 検証期間の値は**順位付けに使わない**。並べ替えに使えるのは選ぶ期間の値だけ(総当たり 7章) |
+| `backend/api/sweep_convert.py` | 結果 → JSON。注記(試した数・選んだことによる偏り・清算コスト控除前・生存者バイアスなど) | 「何通り試したか」を必ず書く(総当たり 8章) |
+| `backend/api/validation.py` の `validate_sweep_inputs`・`validate_holdout` | 格子・検証期間の入力チェック。画面の `lib/sweep.ts` と同じ文を返す(`tests/fixtures/sweep_messages.json`) | |
+| `frontend/lib/sweep.ts` | 組み合わせの数、検証期間の開始日の決め方(最後の3割など)、ヒートマップの色、順位相関の読み方の目安 | 画面に依存しない関数だけ。`sweep.test.ts` で確かめる |
+| `frontend/lib/flow.ts` | 1組のバックテストと同じ reducer に、総当たりの状態(実行中・途中経過・中止・結果)を足した | 1組と総当たりの結果は別々に覚える。マスを選ぶ(`inspectCombo`)と1組の条件になり、「総当たりの結果に戻る」で戻れる |
+| `frontend/components/sweep/` | `SweepView.tsx`(まとめ・上位の表・選んだマスの成績・注記)と `Heatmap.tsx`(ARIA の grid。矢印キーで動き、Enter で選ぶ) | 色だけに頼らない:選んだマスの値は読み取り欄に文字で出し、全部の値は「表で見る」で読める |
+
+**総当たり1回で起きること**
+
+1. 画面:「総当たりを実行」→ `BacktestApp.tsx` の `runSweep()` → `POST /api/sweeps`(すぐに `202` とジョブの番号が返る)
+2. API:入力チェック(格子 → 費用 → 期間 → 検証期間)→ 日足を読む → `validate_sweep`(データの異常は、いちばん長い長期日数の読み込む範囲で一度だけ確かめる。総当たり 5章)→ ジョブを始める
+3. ジョブ:組み合わせを小分けにしてプロセスに配る。各プロセスは `run_pairs` で、組み合わせごとに選ぶ期間・検証期間を `run_backtest` する
+4. 画面:400ミリ秒ごとに `GET /api/sweeps/{id}` で途中経過(何通り終わったか)を受け取り、進み具合のバーに出す。「中止する」は `DELETE`
+5. 全部終わったら、`sweep_summary.rank` が並べ方ごとの順位とまとめを作り、`sweep_convert.result_out` が JSON にする → 画面は手順5でまとめ・ヒートマップを出す
+
+**手を動かして確かめる**
+
+- `make dev-api` → http://localhost:8000/docs で `POST /api/sweeps` を実行し、返ってきた `id` で `GET /api/sweeps/{id}` を何回か呼ぶ(`done` が増えていく)
+- 画面で `DEMO:1003` を「総当たりで比べる」で実行し、選ぶ期間の1位が検証期間で何位だったかを見る。検証期間の開始日を変えると、1位や順位相関はどう変わるか
+- `uv run python -m engine.reference.sweep_cli tests/golden/sweeps/s02_demo1003_holdout/input /tmp/sweep-out` で正解データと同じ計算を動かし、
+  `uv run python -m engine.reference.sweep_cli tests/golden/sweeps/s02_demo1003_holdout/expected /tmp/sweep-out --compare` で正解と比べる(C++ 版の総当たりもこの形で答え合わせする。総当たり 11章)
