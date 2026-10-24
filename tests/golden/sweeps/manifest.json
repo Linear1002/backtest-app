@@ -1,0 +1,144 @@
+{
+  "cases": [
+    {
+      "name": "s01_demo1001_small_grid",
+      "title": "DEMO:1001 全期間。短期2〜6 × 長期8〜12(25通り)。検証期間なし",
+      "kind": "compute",
+      "stage": 1,
+      "expected_error": null,
+      "pairs": 25,
+      "segments": 1,
+      "input_rows": 1119
+    },
+    {
+      "name": "s02_demo1003_holdout",
+      "title": "DEMO:1003(1:2分割)。短期3〜12(刻み3)× 長期15〜45(刻み10)。2025-08-01 から検証期間",
+      "kind": "compute",
+      "stage": 2,
+      "expected_error": null,
+      "pairs": 16,
+      "segments": 2,
+      "input_rows": 1119
+    },
+    {
+      "name": "s03_demo1004_skip_invalid_pairs",
+      "title": "DEMO:1004(1:3分割)。短期5〜20 × 長期10〜40(刻み5・10)。短期 ≥ 長期の組は作らない(12通り)",
+      "kind": "compute",
+      "stage": 2,
+      "expected_error": null,
+      "pairs": 12,
+      "segments": 2,
+      "input_rows": 1119
+    },
+    {
+      "name": "s04_demo1012_late_listing",
+      "title": "DEMO:1012(途中上場)。ウォームアップが足りない組み合わせと、検証期間のウォームアップ",
+      "kind": "compute",
+      "stage": 1,
+      "expected_error": null,
+      "pairs": 9,
+      "segments": 2,
+      "input_rows": 327
+    },
+    {
+      "name": "s05_hand_fractions_holdout",
+      "title": "手作りの10日(3:2併合・10:1併合で端数)。短期1〜2 × 長期2〜3。後半5日が検証期間(選ぶ期間の持ち株を引き継がない)",
+      "kind": "compute",
+      "stage": 2,
+      "expected_error": null,
+      "pairs": 3,
+      "segments": 2,
+      "input_rows": 10
+    },
+    {
+      "name": "s06_hand_repeated_splits",
+      "title": "手作りの8日(2:3分割を2回・10:1併合)。短期1 × 長期2〜3",
+      "kind": "compute",
+      "stage": 2,
+      "expected_error": null,
+      "pairs": 2,
+      "segments": 1,
+      "input_rows": 8
+    },
+    {
+      "name": "se01_no_pairs",
+      "title": "短期 ≥ 長期 の組しかない(入力の誤り)",
+      "kind": "error",
+      "stage": 1,
+      "expected_error": "input",
+      "pairs": 0,
+      "segments": 0,
+      "input_rows": 1119
+    },
+    {
+      "name": "se02_window_over_1000",
+      "title": "短期の最大が1001(入力の誤り)",
+      "kind": "error",
+      "stage": 1,
+      "expected_error": "input",
+      "pairs": 0,
+      "segments": 0,
+      "input_rows": 1119
+    },
+    {
+      "name": "se03_fee_too_high",
+      "title": "手数料率が10%(入力の誤り。格子のあとに確かめる)",
+      "kind": "error",
+      "stage": 1,
+      "expected_error": "input",
+      "pairs": 0,
+      "segments": 0,
+      "input_rows": 1119
+    },
+    {
+      "name": "se04_holdout_on_start",
+      "title": "検証期間の開始日が期間の開始日と同じ(入力の誤り)",
+      "kind": "error",
+      "stage": 1,
+      "expected_error": "input",
+      "pairs": 0,
+      "segments": 0,
+      "input_rows": 1119
+    },
+    {
+      "name": "se05_holdout_too_short",
+      "title": "検証期間の営業日が2日(入力の誤り)",
+      "kind": "error",
+      "stage": 1,
+      "expected_error": "input",
+      "pairs": 0,
+      "segments": 0,
+      "input_rows": 1119
+    },
+    {
+      "name": "se06_anomaly_only_for_longest",
+      "title": "いちばん長い長期日数(60日)の読み込む範囲にだけ、調整係数が Null の日がある(データの異常)",
+      "kind": "error",
+      "stage": 1,
+      "expected_error": "data",
+      "pairs": 0,
+      "segments": 0,
+      "input_rows": 1119
+    },
+    {
+      "name": "se07_grid_checked_before_date_order",
+      "title": "組み合わせがなく(入力)、日付の順番も崩れている(データ)。格子を先に確かめる",
+      "kind": "error",
+      "stage": 1,
+      "expected_error": "input",
+      "pairs": 0,
+      "segments": 0,
+      "input_rows": 1119
+    },
+    {
+      "name": "se08_short_holdout_before_anomaly",
+      "title": "検証期間が2日(入力)で、読み込む範囲に異常もある(データ)。営業日の数を先に確かめる",
+      "kind": "error",
+      "stage": 2,
+      "expected_error": "input",
+      "pairs": 0,
+      "segments": 0,
+      "input_rows": 1119
+    }
+  ]
+}
