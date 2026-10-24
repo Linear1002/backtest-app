@@ -1,0 +1,126 @@
+// 画面〜API〜計算エンジン(Python リファレンス)を通して確かめるテスト。
+// 架空データ(DEMO)だけを使う。起動のしかたは playwright.config.ts。
+
+import AxeBuilder from "@axe-core/playwright";
+import { expect, test, type Page } from "@playwright/test";
+
+/** アクセシビリティの自動チェック(WCAG 2.1 A・AA)。違反があれば、その内容を出して失敗にする。 */
+async function expectNoA11yViolations(page: Page, label: string) {
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+  const summary = results.violations.map(
+    (v) => `${v.id}(${v.impact}): ${v.help} — ${v.nodes.map((n) => n.target.join(" ")).slice(0, 3).join(" / ")}`,
+  );
+  expect(summary, `${label} のアクセシビリティの違反`).toEqual([]);
+}
+
+async function chooseSymbol(page: Page, query: string, code: string) {
+  await page.goto("/");
+  await page.getByLabel("銘柄コードまたは銘柄名").fill(query);
+  await page.getByRole("listitem").filter({ hasText: code }).getByRole("button").first().click();
+  await expect(page.getByText("データの期間", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "この銘柄で進む" }).click();
+  await expect(page.getByRole("heading", { name: /売買ルールを選ぶ/ })).toBeVisible();
+  await page.getByRole("button", { name: "この売買ルールで進む" }).click();
+  await expect(page.getByRole("heading", { name: /条件を決める/ })).toBeVisible();
+}
+
+async function runFromParams(page: Page) {
+  await page.getByRole("button", { name: "確認へ進む", exact: true }).click();
+  await expect(page.getByRole("heading", { name: /確認して実行する/ })).toBeVisible();
+  await page.getByRole("button", { name: /バックテストを実行/ }).click();
+  await expect(page.getByRole("heading", { name: "成績表" })).toBeVisible({ timeout: 30_000 });
+}
+
+test("銘柄を選んで結果まで進め、分割をまたいだ取引も正しく表示される", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByText(/件の銘柄が見つかりました/)).toBeAttached();
+  await expectNoA11yViolations(page, "手順1(銘柄)");
+
+  await chooseSymbol(page, "ゆうなぎ", "1003");
+  await expectNoA11yViolations(page, "手順3(条件)");
+  // 手順が変わったら、その手順の見出しにフォーカスが移る
+  await expect(page.getByRole("heading", { name: /条件を決める/ })).toBeFocused();
+
+  await page.getByRole("button", { name: "確認へ進む", exact: true }).click();
+  await expect(page.getByRole("heading", { name: /確認して実行する/ })).toBeVisible();
+  await expect(page.getByRole("row", { name: /手数料率/ })).toContainText("0.1%");
+  await expectNoA11yViolations(page, "手順4(確認)");
+
+  await page.getByRole("button", { name: /バックテストを実行/ }).click();
+  await expect(page.getByRole("heading", { name: "成績表" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("最終資産", { exact: true })).toBeVisible();
+  // DEMO:1003 は保有中に1:2分割がある。株数は「買った株数 → 売った株数」で書く
+  await expect(page.getByRole("table", { name: "買いから売りまでの取引の一覧" })).toContainText("100株 → 200株");
+  await expect(page.getByRole("heading", { name: "分割・併合の処理" })).toBeVisible();
+  await expect(page.getByText(/架空データです/)).toBeVisible();
+  await expectNoA11yViolations(page, "手順5(結果)");
+
+  // チャートはスライダーとして、キーボードで日付を動かせる
+  const chart = page.getByRole("slider", { name: "チャートの日付" });
+  await chart.focus();
+  await page.keyboard.press("Home");
+  await expect(chart).toHaveAttribute("aria-valuenow", "0");
+  await expect(chart).toHaveAttribute("aria-valuetext", /^2022年1月4日/);
+  await page.keyboard.press("Shift+ArrowRight");
+  await expect(chart).toHaveAttribute("aria-valuenow", "20");
+});
+
+test("入力の誤りはその欄に出て、確認へ進めない", async ({ page }) => {
+  await chooseSymbol(page, "1001", "1001");
+  const fee = page.getByLabel("手数料率");
+  await fee.fill("-1");
+  await page.getByRole("button", { name: "確認へ進む", exact: true }).click();
+  await expect(page.getByText("手数料率とスリッページ率は0以上で入力してください")).toBeVisible();
+  // 最初の誤りの欄にフォーカスが移る
+  await expect(fee).toBeFocused();
+  await expect(fee).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByRole("heading", { name: /条件を決める/ })).toBeVisible();
+
+  await fee.fill("0.1");
+  await expect(page.getByText("手数料率とスリッページ率は0以上で入力してください")).toHaveCount(0);
+});
+
+test("条件を変えたら前の結果には戻れず、確認の画面でそう伝える", async ({ page }) => {
+  await chooseSymbol(page, "1002", "1002");
+  await runFromParams(page);
+  await page.getByRole("button", { name: "条件を変えて試す" }).click();
+  await expect(page.getByRole("heading", { name: /条件を決める/ })).toBeVisible();
+  // 条件を変える前は、手順5(結果)に移れる
+  await expect(page.getByRole("button", { name: "5. 結果へ進む" })).toBeVisible();
+
+  await page.getByLabel("スリッページ率").fill("0.2");
+  await expect(page.getByRole("button", { name: "5. 結果へ進む" })).toHaveCount(0);
+  await page.getByRole("button", { name: "確認へ進む", exact: true }).click();
+  await expect(page.getByText(/前に出した結果とは条件が違います/)).toBeVisible();
+
+  // 元の値に戻せば、また前の結果を見られる
+  await page.getByRole("button", { name: "3. 条件に戻る" }).click();
+  await page.getByLabel("スリッページ率").fill("0.05");
+  await expect(page.getByRole("button", { name: "5. 結果へ進む" })).toBeVisible();
+});
+
+test("API の入力チェック(営業日が3日未満)は、条件の画面に戻ってその欄に出る", async ({ page }) => {
+  await chooseSymbol(page, "1001", "1001");
+  await page.getByLabel("開始日").fill("2026-07-30");
+  await page.getByLabel("終了日").fill("2026-07-31");
+  await runFromParamsExpectingError(page);
+  await expect(page.getByText("期間が短すぎます。営業日が3日以上になるように指定してください")).toBeVisible();
+  await expect(page.getByLabel("開始日")).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByLabel("開始日")).toBeFocused();
+});
+
+async function runFromParamsExpectingError(page: Page) {
+  await page.getByRole("button", { name: "確認へ進む", exact: true }).click();
+  await expect(page.getByRole("heading", { name: /確認して実行する/ })).toBeVisible();
+  await page.getByRole("button", { name: /バックテストを実行/ }).click();
+  await expect(page.getByRole("heading", { name: /条件を決める/ })).toBeVisible({ timeout: 30_000 });
+}
+
+test("スマートフォンの幅でも、取引の記録が読める @mobile", async ({ page }) => {
+  await chooseSymbol(page, "あさつゆ", "1004");
+  await runFromParams(page);
+  // 狭い画面では、表の代わりに1取引を2行で書く一覧を出す(1:3分割をまたいだ取引)
+  await expect(page.getByText(/× 100株 → 300株/)).toBeVisible();
+  await expect(page.getByRole("table", { name: "買いから売りまでの取引の一覧" })).toBeHidden();
+  await expectNoA11yViolations(page, "スマートフォンの結果");
+});
