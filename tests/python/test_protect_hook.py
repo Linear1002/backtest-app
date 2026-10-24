@@ -100,7 +100,7 @@ ALLOWED = [
     "./build/engine/cpp/backtest_cli tests/golden/cases/h01_round_trip/input build/case-out",
     "rm -rf build/case-out",
     "make cpp-case CASE=h01_round_trip 2>&1 | tail -20",
-    "BACKTEST_CPP_STAGE=1 uv run pytest tests/python/test_golden.py -k cpp -v",
+    "BACKTEST_CPP_UPTO=M3 uv run pytest tests/python/test_golden.py -k cpp -v",
     "git diff engine/cpp",
     "git log --oneline -5 -- engine/cpp",
     "git status",

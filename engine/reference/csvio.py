@@ -8,6 +8,7 @@
 - 小数は Python の repr(元の値に戻せる最短の表記)で書く。読むときは文字列から float に戻すので、
   C++ 側は %.17g で書けば同じ値に戻る
 - 真偽値は true / false
+- 入力の bars.csv だけは、データの異常のケースのために inf・nan も書ける(出力には書かない)
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from engine.reference.types import Bar, MaCrossParams
+from engine.reference.types import TRADING_DAYS_PER_YEAR, Bar, MaCrossParams
 
 BAR_COLUMNS = ("date", "open", "high", "low", "close", "volume", "adj_factor", "ex_rt")
 
@@ -32,6 +33,7 @@ PARAM_KEYS = (
     "slippage_rate",
     "initial_cash",
     "lot_size",
+    "trading_days_per_year",
 )
 
 # 出力の表:ファイル名 → (列名, 型) の並び。型は str / int / float / bool
@@ -117,13 +119,15 @@ KEY_VALUES: dict[str, tuple[tuple[str, str], ...]] = {
 # --- 値の書き方・読み方 ---------------------------------------------------------------
 
 
-def format_value(value: Any) -> str:
+def format_value(value: Any, *, allow_nonfinite: bool = False) -> str:
     if value is None:
         return ""
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, float):
         if not math.isfinite(value):
+            if allow_nonfinite:
+                return repr(value)  # inf・-inf・nan(C++ の std::stod でも読める)
             raise ValueError(f"有限でない値は書けません: {value}")
         return repr(value)
     return str(value)
@@ -150,6 +154,9 @@ def parse_value(text: str, kind: str) -> Any:
 
 
 def write_bars_csv(path: Path, bars: Sequence[Bar]) -> None:
+    def value(v: Any) -> str:
+        return format_value(v, allow_nonfinite=True)
+
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f, lineterminator="\n")
         writer.writerow(BAR_COLUMNS)
@@ -157,13 +164,13 @@ def write_bars_csv(path: Path, bars: Sequence[Bar]) -> None:
             writer.writerow(
                 [
                     bar.date.isoformat(),
-                    format_value(bar.open),
-                    format_value(bar.high),
-                    format_value(bar.low),
-                    format_value(bar.close),
-                    format_value(bar.volume),
-                    format_value(bar.adj_factor),
-                    format_value(bar.ex_rt),
+                    value(bar.open),
+                    value(bar.high),
+                    value(bar.low),
+                    value(bar.close),
+                    value(bar.volume),
+                    value(bar.adj_factor),
+                    value(bar.ex_rt),
                 ]
             )
 
@@ -204,6 +211,7 @@ def write_params(path: Path, start: dt.date, end: dt.date, params: MaCrossParams
         "slippage_rate": params.slippage_rate,
         "initial_cash": params.initial_cash,
         "lot_size": params.lot_size,
+        "trading_days_per_year": params.trading_days_per_year,
     }
     path.write_text(
         "".join(f"{key}={format_value(values[key])}\n" for key in PARAM_KEYS), encoding="utf-8"
@@ -235,6 +243,8 @@ def read_params(path: Path) -> tuple[dt.date, dt.date, MaCrossParams]:
             slippage_rate=float(v["slippage_rate"]),
             initial_cash=float(v["initial_cash"]),
             lot_size=int(v["lot_size"]),
+            # 年率換算の日数(市場ごとの設定)。古い params.txt には無いので、無ければ東証の値
+            trading_days_per_year=int(v.get("trading_days_per_year", TRADING_DAYS_PER_YEAR)),
         ),
     )
 
@@ -273,6 +283,11 @@ def read_outputs(out_dir: Path) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for name, columns in TABLES.items():
         path = out_dir / f"{name}.csv"
+        if not path.exists():
+            # 比べる項目を絞っていても、ファイルは全部(行がなくても見出しだけは)書く約束(contract.md)
+            raise FileNotFoundError(
+                f"出力フォルダに {path.name} がありません(行がなくても見出しだけは書く)"
+            )
         with open(path, newline="", encoding="utf-8") as f:
             reader = csv.reader(f)
             header = next(reader)
@@ -288,6 +303,9 @@ def read_outputs(out_dir: Path) -> dict[str, Any]:
                 if row
             ]
     for name, keys in KEY_VALUES.items():
-        values = read_key_values(out_dir / f"{name}.txt")
+        path = out_dir / f"{name}.txt"
+        if not path.exists():
+            raise FileNotFoundError(f"出力フォルダに {path.name} がありません")
+        values = read_key_values(path)
         result[name] = {key: parse_value(values.get(key, ""), kind) for key, kind in keys}
     return result

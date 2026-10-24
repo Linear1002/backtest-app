@@ -1,0 +1,2 @@
+entry_date,entry_price,entry_shares,buy_cost,exit_date,exit_price,exit_shares,sell_proceeds,fraction_cash,pnl,closed_by
+2025-01-09,101.0,9900,999900.0,2025-01-14,99.0,9900,980100.0,0.0,-19800.0,sell

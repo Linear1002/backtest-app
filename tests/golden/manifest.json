@@ -5,304 +5,600 @@
       "title": "1往復の売買。手数料・スリッページ・資産額・指標をすべて手計算できる",
       "kind": "hand",
       "stage": 1,
+      "milestone": "M5",
       "expected_error": null,
-      "business_days": 8
+      "business_days": 8,
+      "input_rows": 8
     },
     {
       "name": "h02_touch_cross",
       "title": "同値をはさんだ上抜け(D=0 はクロスではない)",
       "kind": "hand",
       "stage": 1,
+      "milestone": "M5",
       "expected_error": null,
-      "business_days": 5
+      "business_days": 5,
+      "input_rows": 5
     },
     {
       "name": "h03_ignored_signals",
       "title": "未保有の下抜けと、保有中の上抜けは見送る",
       "kind": "hand",
       "stage": 1,
+      "milestone": "M5",
       "expected_error": null,
-      "business_days": 7
+      "business_days": 7,
+      "input_rows": 7
     },
     {
       "name": "h04_insufficient_cash",
       "title": "100株分の資金がなく、買い注文を2回見送る",
       "kind": "hand",
       "stage": 1,
+      "milestone": "M5",
       "expected_error": null,
-      "business_days": 8
+      "business_days": 8,
+      "input_rows": 8
     },
     {
       "name": "h05_lot_correction",
       "title": "割り算の丸めで lots が1多くなる境目(2.7 の補正)",
       "kind": "hand",
       "stage": 1,
+      "milestone": "M5",
       "expected_error": null,
-      "business_days": 5
+      "business_days": 5,
+      "input_rows": 5
     },
     {
       "name": "h06_halted_carry_over",
       "title": "約定日が売買不成立なので、次の有効日に繰り越す",
       "kind": "hand",
       "stage": 1,
+      "milestone": "M5",
       "expected_error": null,
-      "business_days": 6
+      "business_days": 6,
+      "input_rows": 6
     },
     {
       "name": "h07_split_while_holding",
       "title": "保有中の1:2分割。持ち株が2倍になり、資産額は変わらない",
       "kind": "hand",
       "stage": 2,
+      "milestone": "M6",
       "expected_error": null,
-      "business_days": 6
+      "business_days": 6,
+      "input_rows": 6
     },
     {
       "name": "h08_repeated_splits_fraction",
       "title": "2:3分割を2回(150株→225株)、10:1併合で22株と端数0.5株",
       "kind": "hand",
       "stage": 2,
+      "milestone": "M6",
       "expected_error": null,
-      "business_days": 8
+      "business_days": 8,
+      "input_rows": 8
     },
     {
       "name": "h09_merger_to_zero_cancels_sell",
       "title": "1000:1併合で0株になり決済。待っていた売り注文は取り消す",
       "kind": "hand",
       "stage": 2,
+      "milestone": "M6",
       "expected_error": null,
-      "business_days": 7
+      "business_days": 7,
+      "input_rows": 7
     },
     {
       "name": "h10_rights_issue",
       "title": "株主割当増資(ExRT=3)。持ち株は変えず、移動平均の調整だけに使う",
       "kind": "hand",
       "stage": 2,
+      "milestone": "M6",
       "expected_error": null,
-      "business_days": 6
+      "business_days": 6,
+      "input_rows": 6
     },
     {
       "name": "h11_halted_ex_date_while_holding",
       "title": "売買不成立の日が分割の権利落ち日。評価価格は前の終値×係数",
       "kind": "hand",
       "stage": 2,
+      "milestone": "M6",
       "expected_error": null,
-      "business_days": 7
+      "business_days": 7,
+      "input_rows": 7
     },
     {
       "name": "h12_warmup_signal_on_start",
       "title": "ウォームアップを使い、開始日にシグナルが出る",
       "kind": "hand",
       "stage": 1,
+      "milestone": "M5",
       "expected_error": null,
-      "business_days": 5
+      "business_days": 3,
+      "input_rows": 5
     },
     {
       "name": "h13_no_warmup",
       "title": "開始日より前のデータがない。判定できない最後の日を記録する",
       "kind": "hand",
       "stage": 1,
+      "milestone": "M5",
       "expected_error": null,
-      "business_days": 6
+      "business_days": 6,
+      "input_rows": 6
     },
     {
       "name": "h14_partial_warmup",
       "title": "ウォームアップが long_window 個に足りない",
       "kind": "hand",
       "stage": 1,
+      "milestone": "M5",
       "expected_error": null,
-      "business_days": 7
+      "business_days": 5,
+      "input_rows": 7
     },
     {
       "name": "h15_annualized_overflow",
       "title": "N=2 で資産が約1万倍。年率リターンは桁あふれで算出不可",
       "kind": "hand",
       "stage": 1,
+      "milestone": "M5",
       "expected_error": null,
-      "business_days": 5
+      "business_days": 3,
+      "input_rows": 5
     },
     {
       "name": "h16_no_trades",
       "title": "取引なし。シャープレシオは算出不可、勝率は「−」",
       "kind": "hand",
       "stage": 1,
+      "milestone": "M5",
       "expected_error": null,
-      "business_days": 4
+      "business_days": 4,
+      "input_rows": 4
     },
     {
       "name": "h17_prev_d_zero_on_ex_date",
       "title": "権利落ち日に D(t')=0。D(t') は t' 自身の基準で計算する",
       "kind": "hand",
       "stage": 2,
+      "milestone": "M6",
       "expected_error": null,
-      "business_days": 5
+      "business_days": 5,
+      "input_rows": 5
     },
     {
       "name": "h18_zero_pnl_merger_on_halted_day",
       "title": "売買不成立の日に併合で0株。損益ちょうど0は負けに数える",
       "kind": "hand",
       "stage": 2,
+      "milestone": "M6",
       "expected_error": null,
-      "business_days": 7
+      "business_days": 7,
+      "input_rows": 7
     },
     {
       "name": "h19_period_on_weekends",
-      "title": "開始日・終了日が土日",
+      "title": "開始日・終了日が土日。入力は切り出さず、終了日の後にもデータがある(期間の外は使わない)",
       "kind": "hand",
       "stage": 1,
+      "milestone": "M5",
       "expected_error": null,
-      "business_days": 7
+      "business_days": 5,
+      "input_rows": 15
     },
     {
       "name": "h20_split_type_with_factor_one",
       "title": "ExRT=1 でも調整係数が1なら、分割として扱わない",
       "kind": "hand",
       "stage": 1,
+      "milestone": "M5",
       "expected_error": null,
-      "business_days": 6
+      "business_days": 6,
+      "input_rows": 6
+    },
+    {
+      "name": "h21_touch_down_cross",
+      "title": "同値をはさんだ下抜け。保有中の 上→同値→下 で売り、未保有の 下→同値→下 は見送り(0→負もクロス)",
+      "kind": "hand",
+      "stage": 1,
+      "milestone": "M5",
+      "expected_error": null,
+      "business_days": 9,
+      "input_rows": 9
+    },
+    {
+      "name": "h22_fractions_with_costs_then_sell",
+      "title": "1つの取引で端数が2回(3:2併合・10:1併合)。手数料・スリッページあり、最後は売りで決済",
+      "kind": "hand",
+      "stage": 2,
+      "milestone": "M6",
+      "expected_error": null,
+      "business_days": 10,
+      "input_rows": 10
+    },
+    {
+      "name": "h23_near_zero_pnl",
+      "title": "損益が +ε の取引(buy_cost を notional + fee で計算すると 0 以下になり、勝ち負けが入れ替わる)",
+      "kind": "hand",
+      "stage": 1,
+      "milestone": "M5",
+      "expected_error": null,
+      "business_days": 6,
+      "input_rows": 6
+    },
+    {
+      "name": "h24_halted_first_day_no_prior",
+      "title": "期間の最初の日が売買不成立で、それより前に有効日がない(株がない日は評価価格を計算しない)",
+      "kind": "hand",
+      "stage": 1,
+      "milestone": "M5",
+      "expected_error": null,
+      "business_days": 6,
+      "input_rows": 6
+    },
+    {
+      "name": "h25_never_judgeable",
+      "title": "期間内に一度も判定できない(長期の日数が、有効日の数より多い)",
+      "kind": "hand",
+      "stage": 1,
+      "milestone": "M5",
+      "expected_error": null,
+      "business_days": 5,
+      "input_rows": 5
+    },
+    {
+      "name": "h26_first_judgeable_after_halt",
+      "title": "判定できる最初の有効日の直前が売買不成立。最終日の買いシグナルは約定しない",
+      "kind": "hand",
+      "stage": 1,
+      "milestone": "M5",
+      "expected_error": null,
+      "business_days": 6,
+      "input_rows": 6
     },
     {
       "name": "e01_unrecoverable_factor",
       "title": "分数に戻せない調整係数(データの異常)",
       "kind": "error",
       "stage": 2,
+      "milestone": "M2",
       "expected_error": "data",
-      "business_days": 7
+      "business_days": 7,
+      "input_rows": 7
     },
     {
       "name": "e02_short_period",
       "title": "期間内の営業日が3日未満(入力の誤り)",
       "kind": "error",
       "stage": 1,
+      "milestone": "M2",
       "expected_error": "input",
-      "business_days": 4
+      "business_days": 2,
+      "input_rows": 4
     },
     {
       "name": "e03_bad_windows",
       "title": "短期の日数 ≥ 長期の日数(入力の誤り)",
       "kind": "error",
       "stage": 1,
+      "milestone": "M2",
       "expected_error": "input",
-      "business_days": 4
+      "business_days": 4,
+      "input_rows": 4
     },
     {
       "name": "e04_zero_open",
       "title": "始値が0(データの異常)",
       "kind": "error",
       "stage": 1,
+      "milestone": "M2",
       "expected_error": "data",
-      "business_days": 5
+      "business_days": 5,
+      "input_rows": 5
     },
     {
       "name": "e05_factor_without_type",
       "title": "調整係数があるのに権利落ちの種類がない(データの異常)",
       "kind": "error",
       "stage": 2,
+      "milestone": "M2",
       "expected_error": "data",
-      "business_days": 5
+      "business_days": 5,
+      "input_rows": 5
+    },
+    {
+      "name": "e06_duplicate_date",
+      "title": "同じ日付の日足が2本ある(日付の順番の異常)",
+      "kind": "error",
+      "stage": 1,
+      "milestone": "M2",
+      "expected_error": "data",
+      "business_days": 6,
+      "input_rows": 6
+    },
+    {
+      "name": "e07_order_broken_outside_range",
+      "title": "読み込む範囲より前で日付の順番が崩れている(日付の順番は入力全体で確かめる)",
+      "kind": "error",
+      "stage": 1,
+      "milestone": "M2",
+      "expected_error": "data",
+      "business_days": 10,
+      "input_rows": 30
+    },
+    {
+      "name": "e08_open_null_only",
+      "title": "始値だけが Null(始値と終値は、そろって Null になるはず)",
+      "kind": "error",
+      "stage": 1,
+      "milestone": "M2",
+      "expected_error": "data",
+      "business_days": 6,
+      "input_rows": 6
+    },
+    {
+      "name": "e09_adj_factor_null",
+      "title": "調整係数が Null",
+      "kind": "error",
+      "stage": 1,
+      "milestone": "M2",
+      "expected_error": "data",
+      "business_days": 6,
+      "input_rows": 6
+    },
+    {
+      "name": "e10_adj_factor_zero",
+      "title": "調整係数が 0(正の数のはず)",
+      "kind": "error",
+      "stage": 2,
+      "milestone": "M2",
+      "expected_error": "data",
+      "business_days": 6,
+      "input_rows": 6
+    },
+    {
+      "name": "e11_adj_factor_inf",
+      "title": "調整係数が inf(有限の数のはず)",
+      "kind": "error",
+      "stage": 2,
+      "milestone": "M2",
+      "expected_error": "data",
+      "business_days": 6,
+      "input_rows": 6
+    },
+    {
+      "name": "e12_unknown_ex_rt",
+      "title": "権利落ちの種類が 1〜3 以外(ExRT=4)",
+      "kind": "error",
+      "stage": 2,
+      "milestone": "M2",
+      "expected_error": "data",
+      "business_days": 6,
+      "input_rows": 6
+    },
+    {
+      "name": "e13_factor_out_of_range",
+      "title": "分割・併合の調整係数が扱える範囲(0.001〜1000)の外",
+      "kind": "error",
+      "stage": 2,
+      "milestone": "M2",
+      "expected_error": "data",
+      "business_days": 6,
+      "input_rows": 6
+    },
+    {
+      "name": "e14_shares_overflow",
+      "title": "買う株数が int64 に収まらない(売買の途中で気づくデータの異常)",
+      "kind": "error",
+      "stage": 1,
+      "milestone": "M4",
+      "expected_error": "data",
+      "business_days": 5,
+      "input_rows": 5
+    },
+    {
+      "name": "e15_start_after_end",
+      "title": "開始日が終了日より後(入力の誤り)",
+      "kind": "error",
+      "stage": 1,
+      "milestone": "M2",
+      "expected_error": "input",
+      "business_days": 0,
+      "input_rows": 6
+    },
+    {
+      "name": "e16_fee_too_high",
+      "title": "手数料率が10%(入力の誤り)",
+      "kind": "error",
+      "stage": 1,
+      "milestone": "M2",
+      "expected_error": "input",
+      "business_days": 6,
+      "input_rows": 6
+    },
+    {
+      "name": "e17_window_too_long",
+      "title": "長期の日数が1000日を超える(入力の誤り)",
+      "kind": "error",
+      "stage": 1,
+      "milestone": "M2",
+      "expected_error": "input",
+      "business_days": 6,
+      "input_rows": 6
+    },
+    {
+      "name": "e18_input_checked_before_data",
+      "title": "入力の誤りとデータの異常の両方がある → 入力の誤り(パラメータを先に確かめる)",
+      "kind": "error",
+      "stage": 1,
+      "milestone": "M2",
+      "expected_error": "input",
+      "business_days": 6,
+      "input_rows": 6
+    },
+    {
+      "name": "e19_order_checked_before_period",
+      "title": "日付の順番の崩れと、期間が短すぎる誤りの両方 → データの異常(日付の順番を先に確かめる)",
+      "kind": "error",
+      "stage": 1,
+      "milestone": "M2",
+      "expected_error": "data",
+      "business_days": 2,
+      "input_rows": 6
     },
     {
       "name": "d1001_full_5_25",
       "title": "DEMO:1001 上昇トレンド・全期間・既定値",
       "kind": "demo",
       "stage": 1,
+      "milestone": "M5",
       "expected_error": null,
-      "business_days": 1119
+      "business_days": 1119,
+      "input_rows": 1119
     },
     {
       "name": "d1002_2y_13_26",
       "title": "DEMO:1002 横ばい・直近2年・13日と26日(ウォームアップあり)",
       "kind": "demo",
       "stage": 1,
+      "milestone": "M5",
       "expected_error": null,
-      "business_days": 513
+      "business_days": 487,
+      "input_rows": 513
     },
     {
       "name": "d1003_full_5_25",
       "title": "DEMO:1003 保有中に1:2分割",
       "kind": "demo",
       "stage": 2,
+      "milestone": "M6",
       "expected_error": null,
-      "business_days": 1119
+      "business_days": 1119,
+      "input_rows": 1119
     },
     {
       "name": "d1004_full_5_25",
       "title": "DEMO:1004 保有中に1:3分割(係数 0.333333)",
       "kind": "demo",
       "stage": 2,
+      "milestone": "M6",
       "expected_error": null,
-      "business_days": 1119
+      "business_days": 1119,
+      "input_rows": 1119
     },
     {
       "name": "d1005_2y_8_10",
       "title": "DEMO:1005 保有中に2:3分割(係数 0.666667)",
       "kind": "demo",
       "stage": 2,
+      "milestone": "M6",
       "expected_error": null,
-      "business_days": 497
+      "business_days": 487,
+      "input_rows": 497
     },
     {
       "name": "d1006_2y_10_50",
       "title": "DEMO:1006 保有中に10:1併合",
       "kind": "demo",
       "stage": 2,
+      "milestone": "M6",
       "expected_error": null,
-      "business_days": 537
+      "business_days": 487,
+      "input_rows": 537
     },
     {
       "name": "d1006_2y_8_50",
       "title": "DEMO:1006 10:1併合の権利落ち日に、そのまま売りが約定する",
       "kind": "demo",
       "stage": 2,
+      "milestone": "M6",
       "expected_error": null,
-      "business_days": 537
+      "business_days": 487,
+      "input_rows": 537
     },
     {
       "name": "d1007_2y_3_25",
       "title": "DEMO:1007 保有中に株主割当増資",
       "kind": "demo",
       "stage": 2,
+      "milestone": "M6",
       "expected_error": null,
-      "business_days": 512
+      "business_days": 487,
+      "input_rows": 512
     },
     {
       "name": "d1008_full_20_22",
       "title": "DEMO:1008 売買停止中の分割を、持ったまままたぐ",
       "kind": "demo",
       "stage": 2,
+      "milestone": "M6",
       "expected_error": null,
-      "business_days": 1119
+      "business_days": 1119,
+      "input_rows": 1119
     },
     {
       "name": "d1009_2y_5_25",
       "title": "DEMO:1009 資金不足で買えない",
       "kind": "demo",
       "stage": 1,
+      "milestone": "M5",
       "expected_error": null,
-      "business_days": 512
+      "business_days": 487,
+      "input_rows": 512
     },
     {
       "name": "d1010_2y_25_75",
       "title": "DEMO:1010 下落トレンド・手数料0.3%・スリッページ0.1%",
       "kind": "demo",
       "stage": 1,
+      "milestone": "M5",
       "expected_error": null,
-      "business_days": 562
+      "business_days": 487,
+      "input_rows": 562
     },
     {
       "name": "d1011_2y_lot1",
       "title": "DEMO:1011 急落と回復・1株単位",
       "kind": "demo",
       "stage": 1,
+      "milestone": "M5",
       "expected_error": null,
-      "business_days": 512
+      "business_days": 487,
+      "input_rows": 512
     },
     {
       "name": "d1012_late_listing",
       "title": "DEMO:1012 途中上場・ウォームアップが足りない",
       "kind": "demo",
       "stage": 1,
+      "milestone": "M5",
       "expected_error": null,
-      "business_days": 327
+      "business_days": 286,
+      "input_rows": 327
+    },
+    {
+      "name": "u01_long_history_and_after_end",
+      "title": "切り出していない入力:前に長いデータ・終了日の後のデータ・範囲の外の異常がある(使わない)",
+      "kind": "unsliced",
+      "stage": 1,
+      "milestone": "M5",
+      "expected_error": null,
+      "business_days": 13,
+      "input_rows": 64
+    },
+    {
+      "name": "u02_demo_window_inside_history",
+      "title": "DEMO:1003 の全期間を渡し、途中の8か月だけを計算する(期間より前の分割は読み込む範囲の外)",
+      "kind": "unsliced",
+      "stage": 1,
+      "milestone": "M5",
+      "expected_error": null,
+      "business_days": 160,
+      "input_rows": 1119
     }
   ]
 }

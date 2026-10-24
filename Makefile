@@ -14,10 +14,11 @@ setup: $(BUILD_DIR)/CMakeCache.txt
 $(BUILD_DIR)/CMakeCache.txt:
 	cmake -S . -B $(BUILD_DIR) -G Ninja
 
-# Python のテスト、C++ のビルド・テスト、画面の関数のテスト
+# C++ のビルド → Python のテスト(C++ 版があれば正解データとの答え合わせも)→ C++ のテスト → 画面の関数のテスト
+# C++ を先にビルドするのは、答え合わせが古い backtest_cli と比べてしまわないようにするため
 test: $(BUILD_DIR)/CMakeCache.txt
-	uv run pytest
 	cmake --build $(BUILD_DIR)
+	BACKTEST_CPP_UPTO=$(UPTO) uv run pytest
 	ctest --test-dir $(BUILD_DIR) --output-on-failure
 	npm --prefix frontend test
 
@@ -55,17 +56,18 @@ data-check:
 
 # --- C++ 版エンジンの答え合わせ(docs/cpp/README.md) ---
 
-# 段階1に取り組んでいる間は engine/cpp/STAGE に 1 と書いておく(CI も同じファイルを読む)
-STAGE ?= $(shell cat engine/cpp/STAGE 2>/dev/null || echo 2)
+# いま取り組んでいるマイルストーン(M2〜M6)を engine/cpp/MILESTONE に書いておくと、
+# そこまでに合格するはずのケース・項目だけを比べる(CI も同じファイルを読む)。ファイルがなければ M6(すべて)
+UPTO ?= $(shell cat engine/cpp/MILESTONE 2>/dev/null || echo M6)
 
 # 正解データ(tests/golden)をリファレンス実装で作り直す
 golden:
 	uv run python scripts/make_golden.py
 
-# C++ 版をビルドして、すべてのゴールデンケースと比べる。段階1だけなら make test-cpp STAGE=1
+# C++ 版をビルドして、ゴールデンケースと比べる。マイルストーンを指定するなら make test-cpp UPTO=M3
 test-cpp: $(BUILD_DIR)/CMakeCache.txt
 	cmake --build $(BUILD_DIR)
-	BACKTEST_CPP_STAGE=$(STAGE) uv run pytest tests/python/test_golden.py -k cpp -v
+	BACKTEST_CPP_UPTO=$(UPTO) uv run pytest tests/python/test_golden.py -k cpp -v
 
 # 1つのケースだけ C++ 版で動かして比べる。例: make cpp-case CASE=h01_round_trip
 cpp-case: $(BUILD_DIR)/CMakeCache.txt

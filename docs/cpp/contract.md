@@ -37,9 +37,11 @@ date,open,high,low,close,volume,adj_factor,ex_rt
 | `ex_rt` | 整数(空欄あり) | 権利落ちの種類。1 分割・2 併合・3 株主割当増資。該当なしは空欄 |
 
 - 1行目は見出し。空欄は Null
-- 入力は「読み込む範囲」(ウォームアップの最も古い有効日〜終了日。`docs/mvp.md` 2.2)に切り出してある。
-  ただし、もっと前のデータが入っていても結果は同じになるように作る(切り出しを C++ 側でも行う)
-- 小数は `1e-10` のような指数表記のこともある。`std::stod` で読める
+- **入力は切り出されているとは限らない**。API は銘柄の全期間を渡すので、ウォームアップより前のデータや、
+  終了日より後のデータも入っている(ケース `u01`・`u02`・`h19`)。C++ 側で「読み込む範囲」
+  (ウォームアップの最も古い有効日〜終了日。`docs/mvp.md` 2.2)を切り出してから計算する。
+  多くのケースは、読みやすいように読み込む範囲だけを入力にしてあるが、結果はどちらでも同じになる
+- 小数は `1e-10` のような指数表記のこともある。データの異常のケースでは `inf` もある。どちらも `std::stod` で読める
 
 ### params.txt(key=value)
 
@@ -52,10 +54,12 @@ fee_rate=0.001
 slippage_rate=0.002
 initial_cash=1000000.0
 lot_size=100
+trading_days_per_year=245
 ```
 
 - 率はすべて**割合**(0.1% は `0.001`)
-- `start` `end` は休場日のこともある
+- `start` `end` は休場日のこともある。データの最初の日より前・最後の日より後のこともある(下の「チェックの順番」)
+- `trading_days_per_year` は年率換算に使う年間の営業日数(市場ごとの設定。東証は 245)
 
 ## 出力
 
@@ -107,7 +111,25 @@ kind=data
 message=調整係数 750.3 を分数に戻せませんでした(想定外の係数です)
 ```
 
-`kind` は `input`(パラメータ・期間の誤り。`docs/mvp.md` 4.3)か `data`(データの異常。3.7)。答え合わせで比べるのは `kind` だけで、`message` は自由。
+`kind` は `input`(パラメータ・期間の誤り)か `data`(データの異常。`docs/mvp.md` 3.7)。答え合わせで比べるのは `kind` だけで、`message` は自由。
+
+### チェックの順番(リファレンス実装 `run_backtest` と同じ)
+
+誤りが2つ以上あるときに `kind` がそろうように、この順番で確かめて、最初に見つかった誤りで止める。
+
+1. パラメータ(`input`):日数(1以上の整数・1000以下・短期 < 長期)、率(0以上・10%未満)、初期資金(1円以上・10億円以下)、
+   売買単位と年間の営業日数(1以上の整数)。ケース `e03`・`e16`・`e17`・`e18`
+2. 開始日 ≤ 終了日(`input`)。`e15`
+3. 日付が古い順で重複がないか(`data`)。**入力全体**で確かめる(読み込む範囲を切り出すのに必要なため)。`e06`・`e07`・`e19`
+4. 期間内の営業日が3日以上か(`input`)。`e02`
+5. 読み込む範囲のレコード(`data`。3.7):始値と終値の片方だけ Null、0 以下・有限でない価格、調整係数の Null・0 以下・有限でない値、
+   係数が1でないのに ExRT が 1〜3 以外、分割・併合の係数が 0.001〜1000 の外、p/q に戻せない係数。
+   **読み込む範囲の外のレコードは確かめない**(`u01`)。`e01`・`e04`・`e05`・`e08`〜`e13`
+6. 計算の途中:株数が int64 に収まらない(`data`)。`e14`
+
+**データの範囲のチェック**(開始日がデータの最初の日より前、終了日が最後の日より後)は API の担当で、エンジンはしない。
+エンジンには銘柄本来のデータの範囲が分からないため(切り出された入力では、もとの範囲を知りようがない)。
+終了日がデータの最後の日より後でも、エンジンはあるデータだけで計算する(`h19`)。
 
 ## 答え合わせの基準(`docs/mvp.md` 6章)
 
@@ -117,13 +139,18 @@ message=調整係数 750.3 を分数に戻せませんでした(想定外の係�
   ウォームアップのすべて、取引回数・勝った取引の数・`return_count`・勝率
 - **許容誤差内**:それ以外の小数。`|C++ − Python| ≤ 1e-12 + 1e-9 × |Python|`
 - 行の数が違うときは、その時点で違いとして報告する
+- 出力のファイルは、比べる項目を絞っていても**全部**書く(行がなければ見出しだけ)。足りないと「ファイルがありません」と報告される
+- `BACKTEST_CPP_STRICT=1` を付けると、小数も許容誤差なしで比べる。仕様どおりの順番で計算していれば、ここまで一致する
 
 ```bash
 make cpp-case CASE=h01_round_trip      # 1ケースだけ動かして比べる
-make test-cpp                          # すべてのケース
-make test-cpp STAGE=1                  # 分割・併合のないケースだけ
-BACKTEST_CPP_ONLY=signals.date,signals.side make test-cpp   # 比べる項目を絞る
+make test-cpp                          # engine/cpp/MILESTONE のマイルストーンまで(ファイルがなければすべて)
+make test-cpp UPTO=M3                  # M3 までに合格するはずのケース・項目だけ
+BACKTEST_CPP_ONLY=signals.date,signals.side make test-cpp   # 比べる項目を自分で絞る
+BACKTEST_CPP_STRICT=1 make test-cpp    # ビット単位で一致するか
 ```
+
+ケースの一覧と、どのマイルストーンで合格するかは `tests/golden/manifest.json`(`milestone`・`stage`・`expected_error`)。
 
 ## pybind11 から呼ぶとき(段階が進んだら)
 
@@ -132,11 +159,11 @@ API 側の受け口(`backend/engines.py`)はもうできていて、次の関数
 
 ```python
 backtest_cpp.run_ma_cross(
-    bars,    # [(date, open, high, low, close, volume, adj_factor, ex_rt), ...]  Null は None
+    bars,    # [(date, open, high, low, close, volume, adj_factor, ex_rt), ...]  Null は None。銘柄の全期間
     start,   # "YYYY-MM-DD"
     end,     # "YYYY-MM-DD"
     params,  # {"short_window": 5, "long_window": 25, "fee_rate": 0.001, "slippage_rate": 0.0005,
-             #  "initial_cash": 1000000.0, "lot_size": 100}
+             #  "initial_cash": 1000000.0, "lot_size": 100, "trading_days_per_year": 245}
 ) -> dict
 ```
 

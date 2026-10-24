@@ -9,12 +9,21 @@ tests/golden/manifest.json        … ケースの一覧(段階・説明)
 段階:
   1 … 読み込む範囲に調整係数が1でない日がない(分割・併合・増資の処理がなくても正解できる)
   2 … 分割・併合・増資を含む(docs/cpp/README.md の段階2で正解する)
+マイルストーン(docs/cpp/README.md の M2〜M6):そのケースに合格できるようになる段階。
+  M2 … 入力の誤り・データの異常(チェックだけで正解できる)
+  M4 … 売買の途中で気づくデータの異常(株数の桁あふれ)
+  M5 … 段階1の計算のケース / M6 … 段階2の計算のケース
+
+入力の切り出し:多くのケースは「読み込む範囲」(ウォームアップの最も古い有効日〜終了日)だけを入力にする。
+u で始まるケースと h19 は切り出さない(もっと前のデータ・終了日より後のデータ・範囲の外の異常を含む)。
+API は銘柄の全期間を渡すので、C++ 版も自分で切り出す必要がある(docs/cpp/contract.md)。
 
 リファレンス実装を直したら、このスクリプトで作り直して、差分を確認してからコミットする。
 """
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import json
 import math
@@ -29,9 +38,16 @@ sys.path.insert(0, str(ROOT))
 from backend.api.convert import to_engine_bars  # noqa: E402
 from backend.marketdata.models import SymbolId  # noqa: E402
 from backend.marketdata.synthetic import DemoDataSource  # noqa: E402
-from engine.reference import Bar, EngineDataError, EngineInputError, MaCrossParams  # noqa: E402
+from engine.reference import (  # noqa: E402
+    Bar,
+    EngineDataError,
+    EngineInputError,
+    MaCrossParams,
+    run_backtest,
+)
 from engine.reference.backtest import decide_buy_shares, select_load_range  # noqa: E402
 from engine.reference.cli import run_case  # noqa: E402
+from engine.reference.contract import to_contract_dict  # noqa: E402
 from engine.reference.csvio import write_bars_csv, write_params  # noqa: E402
 
 GOLDEN = ROOT / "tests" / "golden"
@@ -95,6 +111,59 @@ def lot_correction_cash() -> float:
     raise RuntimeError("見つからなかった")
 
 
+def with_bar(bars: list[Bar], index: int, **changes) -> list[Bar]:
+    """index 番目の日足だけを書き換えた列(データの異常のケースを作るため)。"""
+    out = list(bars)
+    out[index] = dataclasses.replace(out[index], **changes)
+    return out
+
+
+def wave(count: int, base: float = 100.0) -> list[float]:
+    """上下に揺れる終値(クロスが何度も起きるように)。小数第2位までの決まった値。"""
+    return [round(base + 6 * math.sin(i / 2.7) + 2 * math.sin(i / 1.3), 2) for i in range(count)]
+
+
+def near_zero_sell_open(
+    buy_open: float, fee: float, slip: float, shares: int
+) -> tuple[float, float, float] | None:
+    """仕様の計算順では損益が +ε、buy_cost を notional + fee で計算すると 0 以下になる売りの始値を探す。
+
+    仕様(2.6):buy_cost = unit_cost × shares(unit_cost = fill_price × (1 + fee_rate))。
+    数学的には notional + fee と同じだが、浮動小数点では最後の桁が違うことがある。
+    勝ち負け(完全一致の項目)が入れ替わるので、計算の順番を変えた C++ を見つけられる。
+    戻り値:(売りの始値, 仕様の損益, 順番を変えたときの損益)。見つからなければ None。
+    """
+    fill_b = buy_open * (1 + slip)
+    buy_cost = (fill_b * (1 + fee)) * shares
+    notional_b = fill_b * shares
+    buy_cost_alt = notional_b + notional_b * fee
+    if not buy_cost < buy_cost_alt:
+        return None
+    x = buy_cost / shares / (1 - slip) / (1 - fee)
+    x = math.nextafter(x, 0.0)
+    for _ in range(4000):
+        fill_s = x * (1 - slip)
+        notional_s = fill_s * shares
+        proceeds = notional_s - notional_s * fee
+        pnl, pnl_alt = proceeds - buy_cost, proceeds - buy_cost_alt
+        if pnl > 0 and pnl_alt <= 0:
+            return x, pnl, pnl_alt
+        if pnl_alt > 0:
+            return None
+        x = math.nextafter(x, math.inf)
+    return None
+
+
+def near_zero_case_prices() -> tuple[float, float]:
+    """near_zero_sell_open が見つかる (買いの始値, 売りの始値) の組。"""
+    for cents in range(10_000, 10_400):
+        buy_open = cents / 100
+        found = near_zero_sell_open(buy_open, 0.001, 0.001, 100)
+        if found:
+            return buy_open, found[0]
+    raise RuntimeError("損益が +ε になる価格が見つからなかった")
+
+
 @dataclass
 class Case:
     name: str
@@ -104,6 +173,7 @@ class Case:
     end: dt.date
     params: MaCrossParams
     slice_input: bool = True  # 読み込む範囲だけを入力にする(エラーのケースは切り出さない)
+    milestone: str | None = None  # None なら段階とエラーの種類から決める
 
 
 def hand_cases() -> list[Case]:
@@ -247,20 +317,63 @@ def hand_cases() -> list[Case]:
         bars_from([100, 99, 100, 100, None, 100_000, 100_000], adj={4: 1000.0}, ex={4: 2}),
         p(cash=1_000, lot=1),
     )
-    b = bars_from([100, 101, 102, 103, 104, 105, 106, 107, 108, 109])
+    b = bars_from([100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 108, 107, 106, 105, 104])
     add(
         "h19_period_on_weekends",
-        "開始日・終了日が土日",
+        "開始日・終了日が土日。入力は切り出さず、終了日の後にもデータがある(期間の外は使わない)",
         b,
         p(),
         start=dt.date(2025, 1, 11),
         end=dt.date(2025, 1, 19),
+        slice_input=False,
     )
     add(
         "h20_split_type_with_factor_one",
         "ExRT=1 でも調整係数が1なら、分割として扱わない",
         bars_from([100, 99, 100, 101, 102, 103], ex={4: 1}),
         p(cash=20_000),
+    )
+    add(
+        "h21_touch_down_cross",
+        "同値をはさんだ下抜け。保有中の 上→同値→下 で売り、未保有の 下→同値→下 は見送り(0→負もクロス)",
+        bars_from([100, 99, 100, 101, 101, 100, 99, 99, 98]),
+        p(),
+    )
+    add(
+        "h22_fractions_with_costs_then_sell",
+        "1つの取引で端数が2回(3:2併合・10:1併合)。手数料・スリッページあり、最後は売りで決済",
+        bars_from(
+            [100, 99, 100, 101, 153, 154, 1545, 1550, 1500, 1490],
+            [100, 99, 100, 100.5, 152, 153.5, 1540, 1548, 1540, 1495],
+            adj={4: 1.5, 6: 10.0},
+            ex={4: 2, 6: 2},
+        ),
+        p(fee=0.001, slip=0.002, cash=10_200),
+    )
+    buy_open, sell_open = near_zero_case_prices()
+    add(
+        "h23_near_zero_pnl",
+        "損益が +ε の取引(buy_cost を notional + fee で計算すると 0 以下になり、勝ち負けが入れ替わる)",
+        bars_from([100, 99, 100, 101, 100, sell_open], [100, 99, 100, buy_open, 100, sell_open]),
+        p(fee=0.001, slip=0.001, cash=15_000),
+    )
+    add(
+        "h24_halted_first_day_no_prior",
+        "期間の最初の日が売買不成立で、それより前に有効日がない(株がない日は評価価格を計算しない)",
+        bars_from([None, 100, 99, 100, 101, 102]),
+        p(),
+    )
+    add(
+        "h25_never_judgeable",
+        "期間内に一度も判定できない(長期の日数が、有効日の数より多い)",
+        bars_from([100, 101, 102, 103, 104]),
+        p(short=2, long=10),
+    )
+    add(
+        "h26_first_judgeable_after_halt",
+        "判定できる最初の有効日の直前が売買不成立。最終日の買いシグナルは約定しない",
+        bars_from([100, 101, None, 102, 101, 103]),
+        p(),
     )
     assert d  # 日付の列は bars_from の中で作る
     return cases
@@ -316,6 +429,126 @@ def error_cases() -> list[Case]:
             b[0].date,
             b[-1].date,
             p(),
+            False,
+        )
+    )
+
+    def data_error(
+        name: str, title: str, bars: list[Bar], params=None, start=None, end=None, milestone=None
+    ):
+        cases.append(
+            Case(
+                name,
+                title,
+                bars,
+                start or bars[0].date,
+                end or bars[-1].date,
+                params or p(),
+                False,
+                milestone,
+            )
+        )
+
+    base = bars_from([100, 99, 100, 101, 102, 103])
+    data_error(
+        "e06_duplicate_date",
+        "同じ日付の日足が2本ある(日付の順番の異常)",
+        with_bar(base, 2, date=base[1].date),
+    )
+    long = bars_from(wave(30))
+    swapped = list(long)
+    swapped[2], swapped[3] = swapped[3], swapped[2]
+    data_error(
+        "e07_order_broken_outside_range",
+        "読み込む範囲より前で日付の順番が崩れている(日付の順番は入力全体で確かめる)",
+        swapped,
+        p(short=2, long=3),
+        start=long[20].date,
+    )
+    data_error(
+        "e08_open_null_only",
+        "始値だけが Null(始値と終値は、そろって Null になるはず)",
+        with_bar(base, 2, open=None),
+    )
+    data_error("e09_adj_factor_null", "調整係数が Null", with_bar(base, 3, adj_factor=None))
+    data_error(
+        "e10_adj_factor_zero",
+        "調整係数が 0(正の数のはず)",
+        with_bar(base, 3, adj_factor=0.0, ex_rt=1),
+    )
+    data_error(
+        "e11_adj_factor_inf",
+        "調整係数が inf(有限の数のはず)",
+        with_bar(base, 3, adj_factor=math.inf, ex_rt=1),
+    )
+    data_error(
+        "e12_unknown_ex_rt",
+        "権利落ちの種類が 1〜3 以外(ExRT=4)",
+        with_bar(base, 3, adj_factor=0.5, ex_rt=4),
+    )
+    data_error(
+        "e13_factor_out_of_range",
+        "分割・併合の調整係数が扱える範囲(0.001〜1000)の外",
+        with_bar(base, 3, adj_factor=2000.0, ex_rt=2),
+    )
+    data_error(
+        "e14_shares_overflow",
+        "買う株数が int64 に収まらない(売買の途中で気づくデータの異常)",
+        bars_from([1e-12, 0.99e-12, 1e-12, 1.01e-12, 1.02e-12]),
+        p(cash=1_000_000_000),
+        milestone="M4",
+    )
+    data_error(
+        "e15_start_after_end",
+        "開始日が終了日より後(入力の誤り)",
+        base,
+        start=base[4].date,
+        end=base[1].date,
+    )
+    data_error("e16_fee_too_high", "手数料率が10%(入力の誤り)", base, p(fee=0.1))
+    data_error("e17_window_too_long", "長期の日数が1000日を超える(入力の誤り)", base, p(long=1001))
+    data_error(
+        "e18_input_checked_before_data",
+        "入力の誤りとデータの異常の両方がある → 入力の誤り(パラメータを先に確かめる)",
+        with_bar(base, 3, open=0.0),
+        p(short=5, long=5),
+    )
+    data_error(
+        "e19_order_checked_before_period",
+        "日付の順番の崩れと、期間が短すぎる誤りの両方 → データの異常(日付の順番を先に確かめる)",
+        with_bar(base, 1, date=base[0].date),
+        start=base[4].date,
+    )
+    return cases
+
+
+def unsliced_cases() -> list[Case]:
+    """入力を切り出さないケース。API と同じく、銘柄の全期間を渡す。"""
+    cases = []
+    bars = bars_from(wave(64))
+    # 読み込む範囲の外に、データの異常を置く(範囲の中だけを 3.7 でチェックするので、エラーにならない)
+    bars = with_bar(bars, 3, open=0.0)  # ウォームアップより前
+    bars = with_bar(bars, 60, adj_factor=750.3, ex_rt=2)  # 終了日より後(分数に戻せない係数)
+    cases.append(
+        Case(
+            "u01_long_history_and_after_end",
+            "切り出していない入力:前に長いデータ・終了日の後のデータ・範囲の外の異常がある(使わない)",
+            bars,
+            bars[40].date,
+            bars[52].date,
+            p(short=2, long=5, fee=0.001, slip=0.0005, cash=20_000),
+            False,
+        )
+    )
+    full = demo("1003")
+    cases.append(
+        Case(
+            "u02_demo_window_inside_history",
+            "DEMO:1003 の全期間を渡し、途中の8か月だけを計算する(期間より前の分割は読み込む範囲の外)",
+            full,
+            dt.date(2025, 8, 1),
+            dt.date(2026, 3, 31),
+            p(5, 25, 0.001, 0.0005),
             False,
         )
     )
@@ -400,8 +633,38 @@ def demo_cases() -> list[Case]:
     ]
 
 
-def stage_of(bars: list[Bar]) -> int:
+def loaded_bars(case: Case) -> list[Bar]:
+    """エンジンが実際に使う「読み込む範囲」。切り出せない(エラーになる)ときは入力全体。"""
+    try:
+        return select_load_range(case.bars, case.start, case.end, case.params.long_window)
+    except EngineInputError, EngineDataError:
+        return case.bars
+
+
+def stage_of(case: Case) -> int:
+    """読み込む範囲に、調整係数が1でない日があれば段階2。範囲の外の係数は計算に使わない。"""
+    bars = loaded_bars(case)
     return 2 if any(bar.adj_factor not in (None, 1.0) for bar in bars) else 1
+
+
+def milestone_of(case: Case, stage: int, error_kind: str | None) -> str:
+    if case.milestone:
+        return case.milestone
+    if error_kind is not None:
+        return "M2"
+    return "M5" if stage == 1 else "M6"
+
+
+def period_business_days(case: Case) -> int:
+    return sum(1 for bar in case.bars if case.start <= bar.date <= case.end)
+
+
+def check_unsliced_matches_sliced(case: Case) -> None:
+    """切り出していない入力と、切り出した入力で、結果がまったく同じになることを確かめる(2.2 の約束)。"""
+    full = to_contract_dict(run_backtest(case.bars, case.start, case.end, case.params))
+    sliced_bars = select_load_range(case.bars, case.start, case.end, case.params.long_window)
+    sliced = to_contract_dict(run_backtest(sliced_bars, case.start, case.end, case.params))
+    assert full == sliced, f"{case.name}:切り出す前と後で結果が違う"
 
 
 def main() -> None:
@@ -409,16 +672,17 @@ def main() -> None:
     if cases_dir.exists():
         shutil.rmtree(cases_dir)
     manifest = []
-    for kind, cases in (("hand", hand_cases()), ("error", error_cases()), ("demo", demo_cases())):
+    groups = (
+        ("hand", hand_cases()),
+        ("error", error_cases()),
+        ("demo", demo_cases()),
+        ("unsliced", unsliced_cases()),
+    )
+    for kind, cases in groups:
         for case in cases:
-            bars = case.bars
-            if case.slice_input:
-                try:
-                    bars = select_load_range(
-                        case.bars, case.start, case.end, case.params.long_window
-                    )
-                except EngineInputError, EngineDataError:
-                    bars = case.bars
+            bars = loaded_bars(case) if case.slice_input else case.bars
+            if kind == "unsliced" or (not case.slice_input and kind == "hand"):
+                check_unsliced_matches_sliced(case)
             input_dir = cases_dir / case.name / "input"
             expected_dir = cases_dir / case.name / "expected"
             input_dir.mkdir(parents=True)
@@ -437,17 +701,21 @@ def main() -> None:
                     .split("\n")[0]
                     .removeprefix("kind=")
                 )
+            stage = stage_of(case)
+            milestone = milestone_of(case, stage, error_kind)
             manifest.append(
                 {
                     "name": case.name,
                     "title": case.title,
                     "kind": kind,
-                    "stage": stage_of(bars),
+                    "stage": stage,
+                    "milestone": milestone,
                     "expected_error": error_kind,
-                    "business_days": len(bars),
+                    "business_days": period_business_days(case),
+                    "input_rows": len(bars),
                 }
             )
-            print(f"{case.name:40s} 段階{stage_of(bars)} {case.title}")
+            print(f"{case.name:40s} 段階{stage} {milestone} {case.title}")
     (GOLDEN / "manifest.json").write_text(
         json.dumps({"cases": manifest}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )

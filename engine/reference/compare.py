@@ -4,7 +4,9 @@
 - それ以外の数値:|a − b| ≤ 1e-12 + 1e-9 × |b|(b が正解の値)
 
 コマンドとしても使える:
-    uv run python -m engine.reference.compare 正解のフォルダ 比べるフォルダ [--only signals.date,signals.side]
+    uv run python -m engine.reference.compare 正解のフォルダ 比べるフォルダ [--only signals.date,signals.side] [--strict]
+
+--strict は、許容誤差を使わずに小数もすべて完全一致で比べる(「ビット単位で一致」を確かめたいとき)。
 """
 
 from __future__ import annotations
@@ -102,9 +104,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--only", default="", help="比べる項目(例: signals.date,signals.side,daily)"
     )
+    parser.add_argument(
+        "--strict", action="store_true", help="小数も許容誤差なしの完全一致で比べる"
+    )
     args = parser.parse_args(argv)
     only = {item.strip() for item in args.only.split(",") if item.strip()} or None
-    differences = compare_results(read_outputs(args.expected), read_outputs(args.actual), only=only)
+    try:
+        actual = read_outputs(args.actual)
+    except (FileNotFoundError, ValueError) as error:
+        print(f"比べるフォルダの出力を読めませんでした:{error}")
+        return 1
+    differences = compare_results(
+        read_outputs(args.expected), actual, only=only, strict=args.strict
+    )
     if not differences:
         print("一致しました")
         return 0

@@ -38,7 +38,8 @@ hooks:
 - エラーメッセージを1行ずつ日本語に直し、「何が起きているか」「よくある原因」「確かめ方」を書く。直したコードは書かない
 - 答え合わせの失敗は、まず次で最初に違う行を見る:
   - `make cpp-case CASE=<ケース名>`(1ケースだけ動かして比べる)
-  - `BACKTEST_CPP_ONLY=signals.date,signals.side make test-cpp STAGE=1`(比べる項目を絞る)
+  - `make test-cpp UPTO=M3`(そのマイルストーンで比べる項目だけ。いまのマイルストーンは `engine/cpp/MILESTONE`)
+  - `BACKTEST_CPP_ONLY=signals.date,signals.side make test-cpp`(比べる項目を自分で絞る)
 - 違った日の値を `engine/reference/` の計算と見比べて、「どの手順(2.5 の手順1〜4)の、どの値がずれ始めたか」を一緒に絞り込む
 - `docs/cpp/README.md` の「よくある落とし穴」の表に当てはまるものがあれば、それを示す
 

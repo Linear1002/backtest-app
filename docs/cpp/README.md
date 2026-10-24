@@ -6,7 +6,7 @@
 - 計算の決まりごと:`docs/mvp.md`(これが正)
 - 入出力の形:`docs/cpp/contract.md`
 - 正解の実装:`engine/reference/`(Python。迷ったらここを読む。1つの関数が仕様の1つの節に対応している)
-- 正解データ:`tests/golden/`(38ケース)。`make test-cpp` で自分の C++ 版と比べられる
+- 正解データ:`tests/golden/`(ケースの一覧と、どのマイルストーンで合格するかは `manifest.json`)。`make test-cpp` で自分の C++ 版と比べられる
 
 ## 全体の流れ
 
@@ -27,15 +27,32 @@ tests/golden/cases/h01_round_trip/expected/ と一致すれば合格
 |---|---|---|---|
 | 準備 | M0 | `engine/cpp` をビルドできる | `backtest_cli` が使い方を表示する |
 | 段階1 | M1 | 入力ファイルを読める | 自分のユニットテスト |
-| | M2 | データのチェックと読み込む範囲 | エラーのケース(e02〜e04)に合格 |
-| | M3 | 移動平均とクロス | シグナルの日付が段階1の全ケースで一致 |
-| | M4 | 売買の流れ(分割なし) | 約定・資産額・取引が一致 |
-| | M5 | 成績指標とウォームアップ | **段階1の全ケースに合格** |
-| 段階2 | M6 | 分割・併合・増資 | **全38ケースに合格** |
+| | M2 | データのチェックと読み込む範囲 | エラーのケース(`milestone` が M2)に合格 |
+| | M3 | 移動平均とクロス | 段階1のケースで、シグナルと移動平均が一致 |
+| | M4 | 売買の流れ(分割なし) | 段階1のケースで、約定・資産額・取引が一致 |
+| | M5 | 成績指標とウォームアップ | **段階1のケースにすべて合格** |
+| 段階2 | M6 | 分割・併合・増資 | **すべてのケースに合格** |
 | 仕上げ | M7 | 速さを測る | Python との速さの比較表 |
 | | M8 | Python から呼べるようにする | 画面で「C++ CPU 版」を選べる |
 
-目安:1つのマイルストーンに数日〜1週間。急がなくていい。M5 まで行けば、面接で「C++ でバックテストエンジンを書いて、Python のリファレンスとビット単位で一致させた」と言える。
+目安:1つのマイルストーンに数日〜1週間。急がなくていい。M5 まで行けば、面接で「C++ でバックテストエンジンを書いて、Python のリファレンスと、日付・株数・勝ち負けは完全に、金額は相対誤差 1e-9 以内で一致させた」と言える。
+`BACKTEST_CPP_STRICT=1 make test-cpp` で小数まで完全に一致すれば、「ビット単位で一致させた」と言ってよい(仕様どおりの順番で計算していれば、ここまで一致する)。
+
+## いまのマイルストーンを書いておく
+
+`engine/cpp/MILESTONE` というファイルに、いま取り組んでいるマイルストーンを1行で書く(例:`M3`)。
+
+```bash
+echo M3 > engine/cpp/MILESTONE
+make test-cpp            # M3 までに合格するはずのケース・項目だけを比べる
+```
+
+- M2:エラーのケースだけを比べる
+- M3:段階1のケースで、シグナル(日付と向き)と移動平均だけを比べる(`signals.action` などはまだ比べない)
+- M4:段階1のケースで、シグナル・約定・日々の値・取引を比べる(成績指標とウォームアップはまだ)。株数の桁あふれ(`e14`)も
+- M5:段階1のケースをすべて / M6:すべてのケース
+- CI も同じファイルを読む。ファイルがなければ M6(すべて)として比べる
+- 一時的に別のマイルストーンで動かすときは `make test-cpp UPTO=M4`
 
 ## ファイルの置き方(おすすめ)
 
@@ -167,7 +184,8 @@ std::vector<std::string> split(const std::string& line, char sep) {
 
 - `bars.csv` の1行目(見出し)が `date,open,high,low,close,volume,adj_factor,ex_rt` かどうかを確かめる
 - 空欄は `std::nullopt`。`ex_rt` は `std::optional<int>`
-- `params.txt` は、まず `key` → `value` の `std::map<std::string, std::string>` に入れてから、必要な型に変換すると楽
+- `params.txt` は、まず `key` → `value` の `std::map<std::string, std::string>` に入れてから、必要な型に変換すると楽(`trading_days_per_year` も読む)
+- データの異常のケースには `inf` という値もある(`std::stod("inf")` は無限大になる)。読めることだけ確かめ、異常かどうかは M2 で判定する
 - 日付は `std::string` のまま持ってよい(`"2025-01-06" < "2025-01-07"` は文字列の比較でも正しい)
 - 読む関数は `std::istream&` を受け取るようにすると、テストで `std::istringstream` を渡せる
 
@@ -180,14 +198,18 @@ std::vector<std::string> split(const std::string& line, char sep) {
 
 ## M2:データのチェックと、読み込む範囲
 
-**作るもの**(`docs/mvp.md` 3.7・2.2・2.8)
+**作るもの**(`docs/mvp.md` 3.7・2.2・2.8)。`docs/cpp/contract.md` の「チェックの順番」どおりに、最初に見つかった誤りで止める。
 
-1. 日付が古い順か(入力全体)
-2. 読み込む範囲の切り出し:開始日より前の有効日を `long_window` 個まで + 期間
-3. 範囲内のレコードのチェック(始値・終値・調整係数・ExRT)
-4. 調整係数を分数 p/q に戻す関数(`recover_split_ratio`)
-5. 入力の誤り(4.3)のチェック
-6. エラーのときに `error.txt` を書いて、終了コード `2` で終わる
+1. パラメータのチェック(入力の誤り)
+2. 開始日 ≤ 終了日(入力の誤り)
+3. 日付が古い順で、重複がないか(**入力全体**。データの異常)
+4. 読み込む範囲の切り出し:開始日より前の有効日を `long_window` 個まで + 期間。期間内の営業日が3日未満なら入力の誤り
+5. **範囲内だけ**のレコードのチェック(始値・終値・調整係数・ExRT)。範囲の外の異常は無視する(ケース `u01`)
+6. 調整係数を分数 p/q に戻す関数(`recover_split_ratio`)。戻せない係数はデータの異常
+7. エラーのときに `error.txt` を書いて、終了コード `2` で終わる
+
+入力には、終了日より後のデータも入っていることがある(API は全期間を渡す)。期間は「開始日以上・終了日以下」で決める。
+データの範囲(開始日がデータの最初の日より前など)のチェックは API の担当なので、エンジンでは**しない**。
 
 **覚える C++**
 
@@ -205,10 +227,12 @@ std::vector<std::string> split(const std::string& line, char sep) {
 **確かめ方**
 
 ```bash
-uv run pytest tests/python/test_golden.py -k "cpp and e0" -v   # エラーのケースだけ
+echo M2 > engine/cpp/MILESTONE
+make test-cpp            # エラーのケース(M2)だけを比べる
 ```
 
-e02〜e04(段階1)が通れば合格。e01・e05 は段階2(係数を扱う)なので、M6 で通ればいい。
+`e01`〜`e19` のうち、`e14`(株数の桁あふれ)以外が通れば合格。`e14` は売買の途中で気づく異常なので M4 で通す。
+係数の異常(`e01`・`e05`・`e10`〜`e13`)は段階2のデータだが、チェックだけなので M2 で通る。
 
 ---
 
@@ -231,11 +255,15 @@ e02〜e04(段階1)が通れば合格。e01・e05 は段階2(係数を扱う)な�
   ルートの `CMakeLists.txt` の `-ffp-contract=off` がそれを止めている。`-ffast-math` は付けない
 - 段階1のケースは調整係数がすべて1なので、CumAdj は全部1になる。でも、計算の形は段階2を見越して仕様どおりに書いておく
 
-**確かめ方**:この段階ではまだ売買をしないので、`signals.csv` の `action` は仮に全部 `order` でいい。比べる項目を絞る。
+**確かめ方**:この段階ではまだ売買をしないので、`signals.csv` の `action` は仮に全部 `order` でいい。
+`MILESTONE` を M3 にすると、シグナルの日付・向きと移動平均だけを比べる。
 
 ```bash
-BACKTEST_CPP_ONLY=signals.date,signals.side,daily.short_ma,daily.long_ma make test-cpp STAGE=1
+echo M3 > engine/cpp/MILESTONE
+make test-cpp
 ```
+
+比べない項目のファイル(`fills.csv` など)も、見出しの1行だけは書いておく。ファイルがないと「ファイルがありません」と報告される。
 
 ---
 
@@ -257,13 +285,18 @@ BACKTEST_CPP_ONLY=signals.date,signals.side,daily.short_ma,daily.long_ma make te
 **ヒント**
 
 - 株数の決め方(2.7)は式の順番どおりに書く。`lots` が1多くなる境目の補正も忘れない(ケース `h05_lot_correction`)
-- 買い:`cash -= unit_cost * shares`。売り:`cash += notional - fee`
+- 買い:`cash -= unit_cost * shares`(`buy_cost = unit_cost * shares`)。`notional + fee` と書くと、数学的には同じでも最後の桁が変わり、
+  損益がちょうど0付近の取引で勝ち負けが入れ替わる(ケース `h23_near_zero_pnl`)。売り:`cash += notional - fee`
 - `trades.csv` には、期間の最後まで持っていた取引も入れる(`docs/cpp/contract.md`)
+- 「現金が負になったらバグとして止める」(2.7)は、`assert` ではなく例外を投げる。Release ビルド(既定)では `assert` が消えるため
+- `lots` は `double` の `std::floor` で求めるので、`int64_t` に変える**前に**、収まるか確かめる(大きすぎる `double` を整数にすると、
+  C++ では結果が決まらない。ケース `e14_shares_overflow` はデータの異常として止める)
 
 **確かめ方**
 
 ```bash
-BACKTEST_CPP_ONLY=signals,fills,skipped_orders,daily,trades make test-cpp STAGE=1
+echo M4 > engine/cpp/MILESTONE
+make test-cpp                          # シグナル・約定・日々の値・取引を比べる
 make cpp-case CASE=h01_round_trip      # 1ケースずつ。違う行が表示される
 ```
 
@@ -283,14 +316,16 @@ std::snprintf(buffer, sizeof buffer, "%.17g", 0.1);  // "0.10000000000000001"
 
 **ヒント**
 
-- 年率リターンは `std::pow(growth, 245.0 / n) - 1`。結果が有限でなければ空欄(算出不可)
-- シャープレシオは「平均 → 偏差の2乗の和 → `n - 1` で割って平方根 → `(平均 / 標準偏差) × √245`」の順(6章)
+- 年率リターンは `std::pow(growth, 年間の営業日数 / n) - 1`(年間の営業日数は `params.txt` の `trading_days_per_year`。`double` で割る)。
+  結果が有限でなければ空欄(算出不可)
+- シャープレシオは「平均 → 偏差の2乗の和 → `n - 1` で割って平方根 → `(平均 / 標準偏差) × √年間の営業日数`」の順(6章)
 - 勝率は、決済した取引がなければ空欄
 
 **確かめ方**
 
 ```bash
-make test-cpp STAGE=1
+echo M5 > engine/cpp/MILESTONE
+make test-cpp
 ```
 
 **ここまで全部通れば、段階1の完成。** ブランチを切ってコミットし、PR を作って `code-reviewer` と `quant-validator` に見てもらおう。
@@ -322,12 +357,14 @@ bool fits(int64_t a, int64_t b) {
 
 - `new_shares = shares * p / q` と `remainder = shares * p % q` は整数で計算する(`double` を通さない)
 - 端数の株数は `static_cast<double>(remainder) / q`、現金にするのは `端数 × 評価価格`(この順番)
-- 落としやすいケース:`h08`(端数)、`h09`(0株になる)、`h11` と `d1008`(売買不成立の日が権利落ち日)、`h17`(D(t') の基準)
+- 落としやすいケース:`h08`(端数)、`h09`(0株になる)、`h11` と `d1008`(売買不成立の日が権利落ち日)、`h17`(D(t') の基準)、
+  `h22`(1つの取引で端数が2回。端数には手数料・スリッページをかけない。損益には端数の現金の合計を入れる)
 
 **確かめ方**
 
 ```bash
-make test-cpp            # 全38ケース
+echo M6 > engine/cpp/MILESTONE
+make test-cpp            # すべてのケース
 ```
 
 **全部通れば、段階2の完成。** これで「仕様からエンジンを書き、独立した実装と一致させた」と言える。
@@ -399,6 +436,11 @@ BACKTEST_CPP_CLI=build-debug/engine/cpp/backtest_cli make test-cpp
 | 小数の末尾がわずかに違う | 足す順番が違う / `float` を使った / FMA が効いている |
 | 年率リターンが空欄にならない | `std::isfinite` で確かめていない |
 | たまに落ちる | 有効日がない日に `close` の `std::optional` を `*` で取り出した |
+| 範囲の外のデータの異常でエラーになる(`u01`) | 3.7 のチェックを、読み込む範囲ではなく入力全体にかけている |
+| 終了日より後の日も計算に入る(`u01`・`h19`) | 期間を「開始日以降」だけで決めて、終了日で止めていない |
+| ウォームアップの日数が違う(`u01`・`u02`) | 開始日より前の有効日を `long_window` 個で打ち切っていない |
+| 勝ち負けが1つだけ違う(`h23`) | `buy_cost` を `notional + fee` で計算している(2.6 の式の形にそろえる) |
+| 端数のある取引の損益が違う(`h22`) | 端数に手数料をかけた / 端数の現金を足し忘れた / 2回目の端数で上書きした |
 
 ## このガイドを終えたら
 
