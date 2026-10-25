@@ -25,6 +25,7 @@ from backend.api.schemas import (
     StrategyOut,
     SweepEngineOut,
     SweepRequest,
+    SweepResultOut,
     SweepStatusOut,
     SymbolDetailOut,
     SymbolListOut,
@@ -42,7 +43,7 @@ from backend.marketdata.service import MarketDataService
 from backend.strategies import STRATEGIES, STRATEGIES_BY_ID
 from backend.sweeps import INTERNAL_ERROR as SWEEP_INTERNAL_ERROR
 from backend.sweeps import SweepJob, SweepJobs, SweepSpec
-from engine.reference.sweep import validate_sweep
+from engine.reference.sweep import InSampleTooShortError, SweepRow, validate_sweep
 from engine.reference.types import TRADING_DAYS_PER_YEAR
 
 router = APIRouter(prefix="/api")
@@ -286,7 +287,12 @@ def start_sweep(body: SweepRequest, service: Service, sweeps: Sweeps) -> SweepSt
     holdout = validate_holdout(body.holdout_start_date, period, data.bars)
     bars = convert.to_engine_bars(data.bars)
     # エンジンのチェック(データの異常など。docs/sweep.md 5章)は、計算を始める前にここで行う
-    pairs, segments = validate_sweep(bars, period.start, period.end, grid, costs, holdout)
+    try:
+        pairs, segments = validate_sweep(bars, period.start, period.end, grid, costs, holdout)
+    except InSampleTooShortError as error:
+        # 選ぶ期間の始まりをそろえると短すぎる:検証期間があればその開始日の欄、なければ格子の欄に出す
+        field = "holdout_start_date" if holdout is not None else "grid"
+        raise InputValidationError([ErrorItem(field=field, message=str(error))]) from error
 
     context = sweep_convert.SweepContext(
         symbol=convert.symbol_out(
@@ -300,15 +306,15 @@ def start_sweep(body: SweepRequest, service: Service, sweeps: Sweeps) -> SweepSt
         costs=costs,
         fee_rate_pct=body.params.fee_rate_pct,
         slippage_rate_pct=body.params.slippage_rate_pct,
-        segments=sweep_convert.segments_out(segments, data.bars),
+        segments=sweep_convert.segments_out(segments, data.bars, period.start),
+        longest_window=max(long for _, long in pairs),
     )
     spec = SweepSpec(tuple(bars), segments, costs, tuple(pairs), context)
 
-    def on_done(job: SweepJob) -> None:
-        assert job.rows is not None
-        job.output = sweep_convert.result_out(context, spec.pairs, job.rows)
+    def build(rows: tuple[SweepRow, ...]) -> SweepResultOut:
+        return sweep_convert.result_out(context, spec.pairs, rows)
 
-    return sweep_status_out(sweeps.start(spec, on_done=on_done))
+    return sweep_status_out(sweeps.start(spec, build=build))
 
 
 @router.get("/sweeps/{sweep_id}", response_model=SweepStatusOut, responses=SWEEP_RESPONSES)

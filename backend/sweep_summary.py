@@ -96,7 +96,9 @@ class Ranking:
     objective: Objective
     order: tuple[int, ...]  # よい順(選ぶ期間)
     best_index: int | None  # 選ぶ期間の1位(値がある組み合わせがなければ None)
-    best_out_of_sample_rank: int | None  # 1位の、検証期間での順位
+    best_tie_count: int  # 1位と同じ値の組み合わせの数(2以上なら1位は決まらない)
+    best_out_of_sample_rank: int | None  # 1位の、検証期間での順位(同率1位なら None)
+    in_sample_ranked: int  # 選ぶ期間の値がある組み合わせの数
     out_of_sample_ranked: int  # 検証期間の値がある組み合わせの数
     rank_correlation: float | None  # 選ぶ期間と検証期間の順位相関
     correlation_pairs: int  # 相関に使った組み合わせの数
@@ -144,6 +146,13 @@ def rank(
     )
     order = order_best_first(is_values, objective)
     best = order[0] if order and is_values[order[0]] is not None else None
+    # 1位と同じ値の組み合わせ(同率1位)。全部が一度も株を持たなかったときなど、1位は1つに決まらない
+    tie_count = (
+        sum(1 for v in is_values if v is not None and v == is_values[best])
+        if best is not None
+        else 0
+    )
+    unique_best = best if tie_count == 1 else None
 
     both = [i for i in range(len(pairs)) if is_values[i] is not None and oos_values[i] is not None]
     correlation = spearman(
@@ -153,10 +162,10 @@ def rank(
 
     neighbors_mean: float | None = None
     neighbors_count = 0
-    if best is not None:
+    if unique_best is not None:
         around = [
             is_values[i]
-            for i in neighbors(pairs, short_values, long_values, best)
+            for i in neighbors(pairs, short_values, long_values, unique_best)
             if is_values[i] is not None
         ]
         neighbors_count = len(around)
@@ -167,9 +176,13 @@ def rank(
         objective=objective,
         order=tuple(order),
         best_index=best,
+        best_tie_count=tie_count,
         best_out_of_sample_rank=(
-            competition_rank(oos_values, best, objective) if best is not None else None
+            competition_rank(oos_values, unique_best, objective)
+            if unique_best is not None
+            else None
         ),
+        in_sample_ranked=sum(1 for v in is_values if v is not None),
         out_of_sample_ranked=sum(1 for v in oos_values if v is not None),
         rank_correlation=correlation,
         correlation_pairs=len(both),

@@ -29,6 +29,7 @@ def metrics(sharpe: float | None, total: float = 0.0, drawdown: float = 0.1) -> 
         return_count=10,
         insufficient_cash_count=0,
         final_equity=1.0,
+        holding_days=5,
     )
 
 
@@ -90,6 +91,7 @@ def test_rank_summary() -> None:
     )
     assert r.order == (1, 4, 2, 0, 5, 3)
     assert r.best_index == 1  # (2,6)
+    assert r.best_tie_count == 1 and r.in_sample_ranked == 5
     # 検証期間で (2,6) の -0.2 より良いのは 0.3・0.5・0.1・0.0 の4つ → 5位
     assert r.best_out_of_sample_rank == 5
     assert r.out_of_sample_ranked == 5
@@ -110,6 +112,7 @@ def test_rank_without_holdout_and_with_no_defined_values() -> None:
         pairs, grid.short_values(), grid.long_values(), [metrics(None)] * 2, None, "sharpe_ratio"
     )
     assert r.best_index is None and r.best_out_of_sample_rank is None
+    assert r.best_tie_count == 0 and r.in_sample_ranked == 0
     assert r.rank_correlation is None and r.neighbors_mean is None
     assert r.out_of_sample_ranked == 0
     # 総リターンはいつも値があるので1位が決まる
@@ -135,3 +138,23 @@ def test_nonfinite_values_are_treated_as_undefined() -> None:
         "sharpe_ratio",
     )
     assert r.order == (1, 0)
+
+
+def test_tied_best_is_not_called_the_first() -> None:
+    """全部の組み合わせが一度も株を持たなかったときなど、1位と同じ値が複数あれば1位は決めない(7章)。"""
+    grid = SweepGrid(2, 6, 2, 4, 8, 2)
+    pairs = grid.pairs()
+    flat = [metrics(None, total=0.0, drawdown=0.0) for _ in pairs]
+    oos = [metrics(None, total=t, drawdown=0.0) for t in (0.1, 0.2, 0.0, -0.1, 0.3, 0.0)]
+    r = rank(pairs, grid.short_values(), grid.long_values(), flat, oos, "max_drawdown")
+    assert r.best_index == 0 and r.best_tie_count == 6  # 並べた順の先頭は組み合わせの順番
+    assert r.best_out_of_sample_rank is None and r.neighbors_mean is None
+    # 2つだけ同じ値の1位
+    values = [metrics(None, total=t) for t in (0.5, 0.2, 0.5, 0.1, 0.0, -0.3)]
+    r2 = rank(pairs, grid.short_values(), grid.long_values(), values, oos, "total_return")
+    assert r2.order[:2] == (0, 2) and r2.best_tie_count == 2
+    assert r2.best_out_of_sample_rank is None
+    # 同率でなければ順位を出す
+    values[2] = metrics(None, total=0.4)
+    r3 = rank(pairs, grid.short_values(), grid.long_values(), values, oos, "total_return")
+    assert r3.best_tie_count == 1 and r3.best_out_of_sample_rank == 3  # 0.1 より良いのは 0.3・0.2

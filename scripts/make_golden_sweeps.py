@@ -10,7 +10,7 @@ tests/golden/sweeps/manifest.json   … ケースの一覧
   1 … 読み込む範囲を合わせた範囲に、調整係数が1でない日がない / 2 … 分割・併合を含む
 
 入力の bars.csv は、架空データ(DEMO)の全期間か、単体のバックテストの正解データ(tests/golden/cases)の入力をそのまま使う。
-総当たりは API と同じく銘柄の全期間を受け取るので、切り出さない。
+総当たりは API と同じく銘柄の全期間を受け取るので、切り出さない(s09 だけは、途中で上場した銘柄に見立てて前を切る)。
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ from engine.reference.csvio import read_bars_csv, write_bars_csv  # noqa: E402
 from engine.reference.sweep import (  # noqa: E402
     SweepCosts,
     SweepGrid,
+    in_sample_start,
     run_sweep,
     validate_grid,
 )
@@ -71,10 +72,19 @@ def full(bars: list[Bar]) -> tuple[dt.date, dt.date]:
     return bars[0].date, bars[-1].date
 
 
+def nth_business_day(bars: list[Bar], start: dt.date, n: int) -> dt.date:
+    """start 以降の営業日を、1から数えて n 番目の日。"""
+    return [bar.date for bar in bars if bar.date >= start][n - 1]
+
+
 def compute_cases() -> list[SweepCase]:
-    d1001, d1003, d1004, d1012 = demo("1001"), demo("1003"), demo("1004"), demo("1012")
+    d1001, d1002, d1003, d1004 = demo("1001"), demo("1002"), demo("1003"), demo("1004")
+    d1005, d1008, d1012 = demo("1005"), demo("1008"), demo("1012")
     h22 = golden_input("h22_fractions_with_costs_then_sell")
     h08 = golden_input("h08_repeated_splits_fraction")
+    # 2025-02-03 に上場した銘柄に見立てる(売買停止の 2025-03-10〜14 が、ウォームアップの途中に入る)
+    d1008_listed = [bar for bar in d1008 if bar.date >= dt.date(2025, 2, 3)]
+    boundary_start = dt.date(2023, 3, 1)
     return [
         SweepCase(
             "s01_demo1001_small_grid",
@@ -101,7 +111,7 @@ def compute_cases() -> list[SweepCase]:
         ),
         SweepCase(
             "s04_demo1012_late_listing",
-            "DEMO:1012(途中上場)。ウォームアップが足りない組み合わせと、検証期間のウォームアップ",
+            "DEMO:1012(途中上場)。開始日より前の有効日が41日しかないので、選ぶ期間の始まりを長期80日のウォームアップがそろう日まで遅らせる",
             d1012,
             dt.date(2025, 6, 2),
             dt.date(2026, 7, 31),
@@ -110,20 +120,54 @@ def compute_cases() -> list[SweepCase]:
         ),
         SweepCase(
             "s05_hand_fractions_holdout",
-            "手作りの10日(3:2併合・10:1併合で端数)。短期1〜2 × 長期2〜3。後半5日が検証期間(選ぶ期間の持ち株を引き継がない)",
+            "手作りの10日(3:2併合で端数)。短期1 × 長期2。2025-01-13 から検証期間(選ぶ期間の持ち株を引き継がない)",
             h22,
             *full(h22),
-            SweepGrid(1, 2, 1, 2, 3, 1),
+            SweepGrid(1, 1, 1, 2, 2, 1),
             costs=SweepCosts(fee_rate=0.001, slippage_rate=0.002, initial_cash=10_200.0),
             holdout_start=dt.date(2025, 1, 13),
         ),
         SweepCase(
             "s06_hand_repeated_splits",
-            "手作りの8日(2:3分割を2回・10:1併合)。短期1 × 長期2〜3",
+            "手作りの8日(2:3分割を2回・10:1併合で端数)。短期1 × 長期2",
             h08,
             *full(h08),
-            SweepGrid(1, 1, 1, 2, 3, 1),
+            SweepGrid(1, 1, 1, 2, 2, 1),
             costs=SweepCosts(fee_rate=0.0, slippage_rate=0.0, initial_cash=15_000.0),
+        ),
+        SweepCase(
+            "s07_demo1005_holdout_on_holiday",
+            "DEMO:1005(2:3分割 2025-07-01)。検証期間の開始日が土曜日(2025-06-28)。分割は検証期間の中",
+            d1005,
+            *full(d1005),
+            SweepGrid(5, 10, 5, 20, 30, 10),
+            holdout_start=dt.date(2025, 6, 28),
+        ),
+        SweepCase(
+            "s08_demo1002_grid_max_off_step",
+            "DEMO:1002。最大が刻みに乗らない格子(短期3〜10 刻み3 → 3・6・9、長期20〜55 刻み10 → 20〜50)",
+            d1002,
+            *full(d1002),
+            SweepGrid(3, 10, 3, 20, 55, 10),
+            holdout_start=dt.date(2025, 10, 1),
+        ),
+        SweepCase(
+            "s09_demo1008_align_across_halt",
+            "DEMO:1008 を 2025-02-03 上場に見立てる。選ぶ期間の始まりをそろえるとき、売買停止の日(有効日でない)は数えない",
+            d1008_listed,
+            dt.date(2025, 2, 3),
+            dt.date(2025, 12, 30),
+            SweepGrid(5, 15, 5, 20, 40, 10),
+            holdout_start=dt.date(2025, 9, 1),
+        ),
+        SweepCase(
+            "s10_in_sample_exactly_three_days",
+            "DEMO:1001。選ぶ期間がちょうど3営業日(通る境界)。開始日より前のデータが十分あるので、始まりは動かない",
+            d1001,
+            boundary_start,
+            nth_business_day(d1001, boundary_start, 20),
+            SweepGrid(2, 2, 1, 5, 5, 1),
+            holdout_start=nth_business_day(d1001, boundary_start, 4),
         ),
     ]
 
@@ -143,6 +187,8 @@ def valid_day_before(bars: list[Bar], start: dt.date, count: int) -> dt.date:
 
 def error_cases() -> list[SweepCase]:
     d1001 = demo("1001")
+    e14 = golden_input("e14_shares_overflow")
+    boundary_start = dt.date(2023, 3, 1)
     start, end = dt.date(2023, 1, 4), dt.date(2024, 12, 30)
     # 長期60日のウォームアップには入るが、長期40日以下のウォームアップには入らない日
     only_longest = valid_day_before(d1001, start, 50)
@@ -210,6 +256,39 @@ def error_cases() -> list[SweepCase]:
             SweepGrid(5, 5, 1, 25, 25, 1),
             holdout_start=d1001[-2].date,
         ),
+        SweepCase(
+            "se09_in_sample_two_days",
+            "選ぶ期間(検証期間より前)が2営業日(入力の誤り。s10 の1日前)",
+            d1001,
+            boundary_start,
+            nth_business_day(d1001, boundary_start, 20),
+            SweepGrid(2, 2, 1, 5, 5, 1),
+            holdout_start=nth_business_day(d1001, boundary_start, 3),
+        ),
+        SweepCase(
+            "se10_alignment_leaves_too_few_days",
+            "データの初日から始め、長期60日のウォームアップを除くと選ぶ期間が1営業日しか残らない(入力の誤り)",
+            d1001,
+            *full(d1001),
+            SweepGrid(5, 5, 1, 60, 60, 1),
+            holdout_start=nth_business_day(d1001, d1001[0].date, 62),
+        ),
+        SweepCase(
+            "se11_anomaly_only_in_holdout",
+            "検証期間の中にだけ、調整係数が Null の日がある(データの異常)",
+            with_bar(d1001, dt.date(2026, 3, 2), adj_factor=None),
+            *full(d1001),
+            SweepGrid(5, 5, 1, 25, 25, 1),
+            holdout_start=dt.date(2025, 12, 1),
+        ),
+        SweepCase(
+            "se12_shares_overflow",
+            "買う株数が int64 に収まらない(5章の7:計算の途中で気づくデータの異常)",
+            e14,
+            *full(e14),
+            SweepGrid(1, 1, 1, 2, 2, 1),
+            costs=SweepCosts(fee_rate=0.0, slippage_rate=0.0, initial_cash=1_000_000_000.0),
+        ),
     ]
 
 
@@ -218,7 +297,8 @@ def union_range(case: SweepCase) -> list[Bar]:
     try:
         pairs = validate_grid(case.grid)
         longest = max(long for _, long in pairs)
-        return select_load_range(case.bars, case.start, case.end, longest)
+        start = in_sample_start(case.bars, case.start, longest) or case.start
+        return select_load_range(case.bars, start, case.end, longest)
     except EngineInputError, EngineDataError:
         return case.bars
 

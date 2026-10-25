@@ -32,7 +32,7 @@
     },
     {
       "name": "s04_demo1012_late_listing",
-      "title": "DEMO:1012(途中上場)。ウォームアップが足りない組み合わせと、検証期間のウォームアップ",
+      "title": "DEMO:1012(途中上場)。開始日より前の有効日が41日しかないので、選ぶ期間の始まりを長期80日のウォームアップがそろう日まで遅らせる",
       "kind": "compute",
       "stage": 1,
       "expected_error": null,
@@ -42,23 +42,63 @@
     },
     {
       "name": "s05_hand_fractions_holdout",
-      "title": "手作りの10日(3:2併合・10:1併合で端数)。短期1〜2 × 長期2〜3。後半5日が検証期間(選ぶ期間の持ち株を引き継がない)",
+      "title": "手作りの10日(3:2併合で端数)。短期1 × 長期2。2025-01-13 から検証期間(選ぶ期間の持ち株を引き継がない)",
       "kind": "compute",
       "stage": 2,
       "expected_error": null,
-      "pairs": 3,
+      "pairs": 1,
       "segments": 2,
       "input_rows": 10
     },
     {
       "name": "s06_hand_repeated_splits",
-      "title": "手作りの8日(2:3分割を2回・10:1併合)。短期1 × 長期2〜3",
+      "title": "手作りの8日(2:3分割を2回・10:1併合で端数)。短期1 × 長期2",
       "kind": "compute",
       "stage": 2,
       "expected_error": null,
-      "pairs": 2,
+      "pairs": 1,
       "segments": 1,
       "input_rows": 8
+    },
+    {
+      "name": "s07_demo1005_holdout_on_holiday",
+      "title": "DEMO:1005(2:3分割 2025-07-01)。検証期間の開始日が土曜日(2025-06-28)。分割は検証期間の中",
+      "kind": "compute",
+      "stage": 2,
+      "expected_error": null,
+      "pairs": 4,
+      "segments": 2,
+      "input_rows": 1119
+    },
+    {
+      "name": "s08_demo1002_grid_max_off_step",
+      "title": "DEMO:1002。最大が刻みに乗らない格子(短期3〜10 刻み3 → 3・6・9、長期20〜55 刻み10 → 20〜50)",
+      "kind": "compute",
+      "stage": 1,
+      "expected_error": null,
+      "pairs": 12,
+      "segments": 2,
+      "input_rows": 1119
+    },
+    {
+      "name": "s09_demo1008_align_across_halt",
+      "title": "DEMO:1008 を 2025-02-03 上場に見立てる。選ぶ期間の始まりをそろえるとき、売買停止の日(有効日でない)は数えない",
+      "kind": "compute",
+      "stage": 2,
+      "expected_error": null,
+      "pairs": 9,
+      "segments": 2,
+      "input_rows": 365
+    },
+    {
+      "name": "s10_in_sample_exactly_three_days",
+      "title": "DEMO:1001。選ぶ期間がちょうど3営業日(通る境界)。開始日より前のデータが十分あるので、始まりは動かない",
+      "kind": "compute",
+      "stage": 1,
+      "expected_error": null,
+      "pairs": 1,
+      "segments": 2,
+      "input_rows": 1119
     },
     {
       "name": "se01_no_pairs",
@@ -139,6 +179,46 @@
       "pairs": 0,
       "segments": 0,
       "input_rows": 1119
+    },
+    {
+      "name": "se09_in_sample_two_days",
+      "title": "選ぶ期間(検証期間より前)が2営業日(入力の誤り。s10 の1日前)",
+      "kind": "error",
+      "stage": 1,
+      "expected_error": "input",
+      "pairs": 0,
+      "segments": 0,
+      "input_rows": 1119
+    },
+    {
+      "name": "se10_alignment_leaves_too_few_days",
+      "title": "データの初日から始め、長期60日のウォームアップを除くと選ぶ期間が1営業日しか残らない(入力の誤り)",
+      "kind": "error",
+      "stage": 1,
+      "expected_error": "input",
+      "pairs": 0,
+      "segments": 0,
+      "input_rows": 1119
+    },
+    {
+      "name": "se11_anomaly_only_in_holdout",
+      "title": "検証期間の中にだけ、調整係数が Null の日がある(データの異常)",
+      "kind": "error",
+      "stage": 1,
+      "expected_error": "data",
+      "pairs": 0,
+      "segments": 0,
+      "input_rows": 1119
+    },
+    {
+      "name": "se12_shares_overflow",
+      "title": "買う株数が int64 に収まらない(5章の7:計算の途中で気づくデータの異常)",
+      "kind": "error",
+      "stage": 1,
+      "expected_error": "data",
+      "pairs": 0,
+      "segments": 0,
+      "input_rows": 5
     }
   ]
 }

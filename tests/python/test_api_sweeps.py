@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
+import json
 import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -26,6 +28,8 @@ from backend.sweeps import SweepJobs
 from engine.reference.sweep import PairsOutcome, SweepCosts, SweepGrid, run_pairs, run_sweep
 
 HOLDOUT = "2025-08-01"
+FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
+HOLDOUT_TABLE = json.loads((FIXTURES / "holdout_messages.json").read_text(encoding="utf-8"))
 
 
 @pytest.fixture(autouse=True)
@@ -111,8 +115,12 @@ def test_sweep_runs_and_matches_the_reference(client: TestClient) -> None:
     assert result["grid"]["short_values"] == [3, 6, 9, 12]
     assert result["grid"]["long_values"] == [15, 25, 35, 45]
     assert [s["name"] for s in result["segments"]] == ["in_sample", "out_of_sample"]
-    assert result["segments"][0]["end_date"] == "2025-07-31"
-    assert result["segments"][1]["start_date"] == HOLDOUT
+    in_sample, out_of_sample = result["segments"]
+    # データの初日から始めたので、選ぶ期間の始まりを長期45日のウォームアップがそろう日までそろえる(docs/sweep.md 3章)
+    assert in_sample["requested_start_date"] == "2022-01-04"
+    assert in_sample["start_date"] == "2022-03-11" and in_sample["skipped_business_days"] == 45
+    assert in_sample["end_date"] == "2025-07-31"
+    assert out_of_sample["start_date"] == HOLDOUT and out_of_sample["skipped_business_days"] == 0
 
     # 1つ1つの成績は、リファレンスの総当たりとまったく同じ
     bars = demo_bars("1003")
@@ -145,11 +153,17 @@ def test_sweep_runs_and_matches_the_reference(client: TestClient) -> None:
         if c["in_sample"]["sharpe_ratio"] is not None
     ]
     assert best["in_sample"]["sharpe_ratio"] == max(defined)
+    assert sharpe["best_tie_count"] == 1 and sharpe["in_sample_ranked"] == len(defined)
     assert sharpe["out_of_sample_ranked"] >= 1
 
     kinds = [n["kind"] for n in result["notes"]]
-    assert kinds[:2] == ["trials", "selection_bias"]
-    assert "16通り" in result["notes"][0]["message"]
+    assert kinds[:4] == ["trials", "aligned_start", "selection_bias", "sampling_error"]
+    notes = {n["kind"]: n["message"] for n in result["notes"]}
+    assert "16通り" in notes["trials"] and "試し直した分" in notes["trials"]
+    assert "2022-01-04〜2022-03-10 の45営業日" in notes["aligned_start"]
+    assert "最長45日" in notes["aligned_start"]
+    # 検証期間 243営業日 → √(245 / 242) ≒ 1.0
+    assert "検証期間は243営業日" in notes["sampling_error"] and "±1.0" in notes["sampling_error"]
     assert "demo_data" in kinds and "survivorship" not in kinds
     # 検証期間は1年未満(2025-08-01〜2026-07-31 は 245 営業日に届かない)
     assert any(
@@ -267,6 +281,44 @@ def test_holdout_errors(client: TestClient, holdout: str, message: str) -> None:
     assert errors_of(client.post("/api/sweeps", json=body(holdout_start_date=holdout))) == {
         "holdout_start_date": message
     }
+
+
+@pytest.mark.parametrize(
+    "case",
+    [c for c in HOLDOUT_TABLE["cases"] if c["only"] != "frontend"],
+    ids=lambda c: c["holdout"] or "空欄",
+)
+def test_holdout_messages_table(client: TestClient, case: dict) -> None:
+    """検証期間の開始日 → メッセージ の表(画面の lib/sweep.test.ts も同じ表を読む)。"""
+    request = {
+        "symbol_id": HOLDOUT_TABLE["symbol_id"],
+        **HOLDOUT_TABLE["period"],
+        "holdout_start_date": case["holdout"],
+        "grid": HOLDOUT_TABLE["grid"],
+        "params": {"fee_rate_pct": 0.1, "slippage_rate_pct": 0.05, "initial_cash": 1_000_000},
+    }
+    response = client.post("/api/sweeps", json=request)
+    if case["message"] is None:
+        assert response.status_code == 202, response.json()
+    else:
+        assert errors_of(response) == {"holdout_start_date": case["message"]}
+
+
+def test_alignment_error_is_shown_at_the_holdout_or_the_grid(client: TestClient) -> None:
+    """選ぶ期間の始まりをそろえると短すぎるとき(docs/sweep.md 5章の5)。直せる欄に出す。"""
+    grid = {"long_min": 60, "long_max": 60, "short_min": 5, "short_max": 5}
+    # 検証期間の開始日(2022-03-31)は59営業日目:長期60日のウォームアップがそろう前に選ぶ期間が終わる
+    request = body(symbol_id="DEMO:1001", holdout_start_date="2022-03-31", grid=grid)
+    errors = errors_of(client.post("/api/sweeps", json=request))
+    assert list(errors) == ["holdout_start_date"]
+    assert errors["holdout_start_date"].startswith(
+        "長期の日数(最長60日)のウォームアップに使う日を除くと"
+    )
+    short_period = body(
+        symbol_id="DEMO:1001", end_date="2022-03-31", holdout_start_date=None, grid=grid
+    )
+    errors = errors_of(client.post("/api/sweeps", json=short_period))
+    assert list(errors) == ["grid"] and "期間を広げてください" in errors["grid"]
 
 
 def test_period_and_request_errors(client: TestClient) -> None:

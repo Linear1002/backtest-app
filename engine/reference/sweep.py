@@ -112,6 +112,7 @@ class SegmentMetrics:
     return_count: int
     insufficient_cash_count: int
     final_equity: float
+    holding_days: int  # その日の評価のときに株を持っていた営業日の数(6章)
 
 
 @dataclass(frozen=True)
@@ -189,6 +190,53 @@ def _business_days(bars: Sequence[Bar], segment: Segment) -> int:
     return sum(1 for bar in bars if segment.start <= bar.date <= segment.end)
 
 
+def in_sample_start(bars: Sequence[Bar], start: dt.date, longest: int) -> dt.date | None:
+    """選ぶ期間の始まり(3章)。すべての組み合わせのウォームアップがそろう日にそろえる。
+
+    start より前の有効日が longest 個以上あれば start のまま。足りなければ、start 以降の営業日のうち、
+    それより前の有効日が longest 個そろう最初の日。データの最後までそろわなければ None。
+    """
+    count = sum(1 for bar in bars if bar.date < start and bar.is_valid)
+    if count >= longest:
+        return start
+    for bar in bars:
+        if bar.date < start:
+            continue
+        if count >= longest:
+            return bar.date
+        if bar.is_valid:
+            count += 1
+    return None
+
+
+class InSampleTooShortError(EngineInputError):
+    """選ぶ期間の始まりをそろえると、営業日が3日未満になる(5章の5)。API が入力欄に結びつけるために分けてある。"""
+
+
+def _aligned_too_short(longest: int, has_holdout: bool) -> InSampleTooShortError:
+    where, fix = (
+        ("選ぶ期間", "検証期間の開始日を遅くしてください")
+        if has_holdout
+        else ("期間", "期間を広げてください")
+    )
+    return InSampleTooShortError(
+        f"長期の日数(最長{longest}日)のウォームアップに使う日を除くと、{where}の営業日が3日未満になります。"
+        f"長期の日数を短くするか、{fix}"
+    )
+
+
+def align_in_sample(
+    bars: Sequence[Bar], segments: Sequence[Segment], longest: int, has_holdout: bool
+) -> tuple[Segment, ...]:
+    """5章の5(続き)。選ぶ期間の始まりをそろえ、そろえたあとも営業日が3日以上あるかを確かめる。"""
+    in_sample, *rest = segments
+    start = in_sample_start(bars, in_sample.start, longest)
+    aligned = Segment(IN_SAMPLE, start, in_sample.end) if start is not None else None
+    if aligned is None or _business_days(bars, aligned) < MIN_PERIOD_BUSINESS_DAYS:
+        raise _aligned_too_short(longest, has_holdout)
+    return (aligned, *rest)
+
+
 def validate_sweep(
     bars: Sequence[Bar],
     start: dt.date,
@@ -214,9 +262,10 @@ def validate_sweep(
                 "選ぶ期間(検証期間より前)の営業日が3日未満です。検証期間の開始日を遅くしてください"
             )
         raise EngineInputError("検証期間の営業日が3日未満です。検証期間の開始日を早くしてください")
-    # 6:すべての組み合わせの読み込む範囲を合わせた範囲 = いちばん長い長期日数で start〜end を読む範囲
     longest = max(long for _, long in pairs)
-    validate_records(select_load_range(bars, start, end, longest))
+    segments = align_in_sample(bars, segments, longest, holdout_start is not None)  # 5(続き)
+    # 6:すべての組み合わせの読み込む範囲を合わせた範囲 = いちばん長い長期日数で、そろえた選ぶ期間の始まり〜end を読む範囲
+    validate_records(select_load_range(bars, segments[0].start, end, longest))
     return pairs, segments
 
 
@@ -236,6 +285,7 @@ def segment_metrics(result: BacktestResult) -> SegmentMetrics:
         return_count=m.return_count,
         insufficient_cash_count=result.insufficient_cash_count,
         final_equity=result.final_equity,
+        holding_days=sum(1 for day in result.daily if day.shares > 0),
     )
 
 

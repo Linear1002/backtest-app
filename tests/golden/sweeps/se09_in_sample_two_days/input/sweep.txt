@@ -1,0 +1,14 @@
+start=2023-03-01
+end=2023-03-29
+holdout_start=2023-03-03
+short_min=2
+short_max=2
+short_step=1
+long_min=5
+long_max=5
+long_step=1
+fee_rate=0.001
+slippage_rate=0.0005
+initial_cash=1000000.0
+lot_size=100
+trading_days_per_year=245

@@ -1,0 +1,23 @@
+{
+  "_説明": "総当たりの検証期間の開始日 → 誤りのメッセージ の表(docs/sweep.md 5章)。画面(frontend/lib/sweep.test.ts の validateHoldout)と API(tests/python/test_api_sweeps.py の POST /api/sweeps)の両方がこの表を読む。期間は period(架空データ DEMO:1001 の全期間)、格子は grid(いちばん長い長期日数は25日なので、選ぶ期間の始まりは 2022-02-09 にそろう)。message が null なら誤りなし。only は、片方だけが確かめる誤り(api:営業日の数と、選ぶ期間の始まりをそろえたあとの営業日の数。画面はデータを持たないので確かめない)。誤りは API でも画面でも holdout_start_date の欄に出す。",
+  "symbol_id": "DEMO:1001",
+  "period": { "start_date": "2022-01-04", "end_date": "2026-07-31" },
+  "grid": { "short_min": 5, "short_max": 5, "short_step": 1, "long_min": 25, "long_max": 25, "long_step": 1 },
+  "cases": [
+    { "holdout": "2025-08-01", "message": null, "only": null },
+    { "holdout": "2025-08-02", "message": null, "only": null },
+    { "holdout": "2026-07-29", "message": null, "only": null },
+    { "holdout": "2022-02-15", "message": null, "only": null },
+    { "holdout": "2022-01-04", "message": "検証期間の開始日は、期間の開始日より後、終了日以前の日付にしてください", "only": null },
+    { "holdout": "2021-12-31", "message": "検証期間の開始日は、期間の開始日より後、終了日以前の日付にしてください", "only": null },
+    { "holdout": "2026-08-01", "message": "検証期間の開始日は、期間の開始日より後、終了日以前の日付にしてください", "only": null },
+    { "holdout": "", "message": "日付は YYYY-MM-DD の形で入力してください", "only": null },
+    { "holdout": "2025/08/01", "message": "日付は YYYY-MM-DD の形で入力してください", "only": null },
+    { "holdout": "2025-02-30", "message": "日付は YYYY-MM-DD の形で入力してください", "only": null },
+    { "holdout": "2026-07-31", "message": "検証期間の営業日が3日未満です。検証期間の開始日を早くしてください", "only": "api" },
+    { "holdout": "2026-07-30", "message": "検証期間の営業日が3日未満です。検証期間の開始日を早くしてください", "only": "api" },
+    { "holdout": "2022-01-06", "message": "選ぶ期間(検証期間より前)の営業日が3日未満です。検証期間の開始日を遅くしてください", "only": "api" },
+    { "holdout": "2022-01-07", "message": "長期の日数(最長25日)のウォームアップに使う日を除くと、選ぶ期間の営業日が3日未満になります。長期の日数を短くするか、検証期間の開始日を遅くしてください", "only": "api" },
+    { "holdout": "2022-02-14", "message": "長期の日数(最長25日)のウォームアップに使う日を除くと、選ぶ期間の営業日が3日未満になります。長期の日数を短くするか、検証期間の開始日を遅くしてください", "only": "api" }
+  ]
+}

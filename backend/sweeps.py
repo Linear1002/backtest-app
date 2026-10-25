@@ -3,9 +3,14 @@
 総当たりは数秒〜数分かかるので、リクエストはすぐに返し、計算は別のスレッドで進める。
 - 組み合わせをいくつかのかたまり(chunk)に分け、CPU のコアの数だけのプロセスで並列に計算する
   (engine.reference.sweep.run_pairs。プロセスを分けるのは、Python のスレッドでは計算が並列にならないため)
+- かたまりは小さく(最大 MAX_CHUNK_PAIRS 通り。Python で1秒ほど)する。中止したとき・サーバーを止めるときは、
+  計算中のかたまりが終わるまで待つことになるため
 - 画面は GET で途中経過(終わった組み合わせの数)を問い合わせ、終わったら結果を受け取る。DELETE で中止できる
 - ジョブはこのプロセスのメモリにだけ持つ(ローカルで1人が使う前提)。終わったジョブは30分で消す
 - 画面を閉じるなどして問い合わせが60秒来なくなったジョブは、残りの計算を取り消す
+
+スレッドの決まり:ジョブの欄(status・done・rows・output など)は、リクエストのスレッドと計算を見張るスレッドの
+両方から読み書きするので、必ず job.lock の中で読み書きする。ジョブの一覧(self._jobs)は self._lock の中で扱う。
 """
 
 from __future__ import annotations
@@ -47,6 +52,7 @@ MAX_RUNNING_JOBS = 2  # 同時に計算するジョブの数(サーバーを守�
 CHUNKS_PER_WORKER = (
     8  # 1つのプロセスに渡すかたまりの数の目安(途中経過の細かさと、受け渡しの手間の兼ね合い)
 )
+MAX_CHUNK_PAIRS = 10  # 1つのかたまりの組み合わせの数の上限(中止・停止の待ち時間を短くするため)
 
 INTERNAL_ERROR = (
     "総当たりの計算中に、想定していないエラーが起きました。"
@@ -56,6 +62,8 @@ INTERNAL_ERROR = (
 PairsRunner = Callable[
     [Sequence[Bar], Sequence[Segment], SweepCosts, Sequence[tuple[int, int]], int], PairsOutcome
 ]
+# 計算が終わったら、組み合わせの順番に並んだ行から、画面に返す結果を作る(routes が渡す)
+ResultBuilder = Callable[[tuple[SweepRow, ...]], Any]
 
 
 class TooManyJobsError(RuntimeError):
@@ -88,16 +96,19 @@ class SweepJob:
     finished_at: float | None = None
     last_polled: float = 0.0
     cancel_requested: bool = False
-    output: Any = None  # 画面に返す結果(routes が作って入れる)
+    output: Any = None  # 画面に返す結果(ResultBuilder が作ったもの)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
 
 def chunk_ranges(total: int, workers: int) -> list[tuple[int, int]]:
-    """組み合わせ 0..total-1 を、(最初の位置, 終わりの位置) のかたまりに分ける。"""
+    """組み合わせ 0..total-1 を、(最初の位置, 終わりの位置) のかたまりに分ける(終わりの位置は含まない)。
+
+    プロセス1つあたり CHUNKS_PER_WORKER 個くらいに分ける。ただし1つのかたまりは MAX_CHUNK_PAIRS 通りまで。
+    """
     if total <= 0:
         return []
     target = max(1, workers * CHUNKS_PER_WORKER)
-    size = max(1, math.ceil(total / target))
+    size = min(MAX_CHUNK_PAIRS, max(1, math.ceil(total / target)))
     return [(first, min(first + size, total)) for first in range(0, total, size)]
 
 
@@ -126,8 +137,8 @@ class SweepJobs:
 
     # --- 外から使う ------------------------------------------------------------------
 
-    def start(self, spec: SweepSpec, on_done: Callable[[SweepJob], None] | None = None) -> SweepJob:
-        """ジョブを始める。on_done は、計算が終わったら(成功したときだけ)呼ばれる。"""
+    def start(self, spec: SweepSpec, build: ResultBuilder | None = None) -> SweepJob:
+        """ジョブを始める。build は、計算が終わったら(成功したときだけ)行から結果を作る。"""
         with self._lock:
             self._forget_old()
             running = sum(1 for job in self._jobs.values() if job.status == "running")
@@ -146,7 +157,7 @@ class SweepJobs:
             self._jobs[job.id] = job
             executor = self._get_executor()
         thread = threading.Thread(
-            target=self._run, args=(job, executor, on_done), name=f"sweep-{job.id[:8]}", daemon=True
+            target=self._run, args=(job, executor, build), name=f"sweep-{job.id[:8]}", daemon=True
         )
         thread.start()
         return job
@@ -169,11 +180,16 @@ class SweepJobs:
         return job
 
     def shutdown(self) -> None:
-        """API サーバーを止めるとき。計算中のジョブは取り消す。"""
+        """API サーバーを止めるとき。計算中のジョブは取り消す。
+
+        まだ始まっていないかたまりは取り消す。計算中のかたまり(最大 MAX_CHUNK_PAIRS 通り)は、終わるまで待つことになる。
+        """
         with self._lock:
-            for job in self._jobs.values():
-                job.cancel_requested = True
+            jobs = list(self._jobs.values())
             executor, self._executor = self._executor, None
+        for job in jobs:
+            with job.lock:
+                job.cancel_requested = True
         if executor is not None:
             executor.shutdown(wait=False, cancel_futures=True)
 
@@ -206,9 +222,7 @@ class SweepJobs:
             for key, value in changes.items():
                 setattr(job, key, value)
 
-    def _run(
-        self, job: SweepJob, executor: Executor, on_done: Callable[[SweepJob], None] | None
-    ) -> None:
+    def _run(self, job: SweepJob, executor: Executor, build: ResultBuilder | None) -> None:
         spec = job.spec
         futures: dict[Future[PairsOutcome], tuple[int, int]] = {}
         try:
@@ -257,13 +271,10 @@ class SweepJobs:
         rows: list[SweepRow] = []
         for first in sorted(outcomes):
             rows.extend(outcomes[first].rows)
-        with job.lock:
-            job.rows = tuple(rows)
         try:
-            if on_done is not None:
-                on_done(job)
+            output = build(tuple(rows)) if build is not None else None
         except Exception:
             logger.exception("総当たりの結果をまとめられませんでした(ジョブ %s)", job.id)
             self._finish(job, "failed", error_kind="internal", error_message=INTERNAL_ERROR)
             return
-        self._finish(job, "done")
+        self._finish(job, "done", rows=tuple(rows), output=output)

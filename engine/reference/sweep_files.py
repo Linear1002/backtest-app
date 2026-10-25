@@ -49,6 +49,7 @@ COMBO_COLUMNS: tuple[tuple[str, str], ...] = (
     ("return_count", "int"),
     ("insufficient_cash_count", "int"),
     ("final_equity", "float"),
+    ("holding_days", "int"),
 )
 
 # 完全に一致させる列(docs/sweep.md 6章)。それ以外の小数は許容誤差内で比べる
@@ -61,6 +62,7 @@ EXACT_COMBO_COLUMNS = (
     "winning_trades",
     "return_count",
     "insufficient_cash_count",
+    "holding_days",
 )
 
 
@@ -146,6 +148,7 @@ def combo_rows(result: SweepResult) -> list[dict[str, Any]]:
                 "return_count": m.return_count,
                 "insufficient_cash_count": m.insufficient_cash_count,
                 "final_equity": m.final_equity,
+                "holding_days": m.holding_days,
             }
         )
     return rows

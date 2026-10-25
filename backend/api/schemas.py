@@ -242,6 +242,8 @@ class NoteOut(_Model):
         "trials",
         "selection_bias",
         "no_holdout",
+        "aligned_start",
+        "sampling_error",
     ]
     message: str
 
@@ -386,8 +388,16 @@ class SegmentOut(_Model):
     name: Literal["in_sample", "out_of_sample"] = Field(
         description="in_sample は選ぶ期間、out_of_sample は検証期間"
     )
-    start_date: dt.date
+    start_date: dt.date = Field(
+        description="計算した期間の開始日(選ぶ期間は、始まりをそろえたあとの日)"
+    )
     end_date: dt.date
+    requested_start_date: dt.date = Field(
+        description="指定された開始日。選ぶ期間の始まりをそろえたとき(docs/sweep.md 3章)だけ start_date と違う"
+    )
+    skipped_business_days: int = Field(
+        description="そろえるためにウォームアップにだけ使った営業日の数(requested_start_date〜start_date の前日)"
+    )
     first_business_day: dt.date
     last_business_day: dt.date
     business_days: int
@@ -427,6 +437,7 @@ class SweepMetricsOut(_Model):
     return_count: int
     insufficient_cash_count: int
     final_equity: float
+    holding_days: int = Field(description="株を持っていた営業日の数")
 
 
 class ComboOut(_Model):
@@ -442,12 +453,18 @@ class RankingOut(_Model):
     objective: Literal["sharpe_ratio", "total_return", "max_drawdown"]
     order: list[int] = Field(description="選ぶ期間の成績のよい順")
     best_index: int | None
-    best_out_of_sample_rank: int | None = Field(description="1位の組み合わせの、検証期間での順位")
+    best_tie_count: int = Field(
+        description="選ぶ期間の1位と同じ値の組み合わせの数。2以上なら1位は1つに決まらない(order の先頭からこの数)"
+    )
+    best_out_of_sample_rank: int | None = Field(
+        description="1位の組み合わせの、検証期間での順位(同率1位のときは null)"
+    )
+    in_sample_ranked: int = Field(description="選ぶ期間の値がある組み合わせの数")
     out_of_sample_ranked: int = Field(description="検証期間の値がある組み合わせの数")
     rank_correlation: float | None = Field(description="選ぶ期間と検証期間の順位相関(スピアマン)")
     correlation_pairs: int
     neighbors_mean: float | None = Field(
-        description="1位のとなりの組み合わせの、選ぶ期間の値の平均"
+        description="1位のとなりの組み合わせの、選ぶ期間の値の平均(同率1位のときは null)"
     )
     neighbors_count: int
 
