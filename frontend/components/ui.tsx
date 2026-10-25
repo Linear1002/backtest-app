@@ -83,3 +83,30 @@ export function PrimaryButton({
     </button>
   );
 }
+
+/**
+ * 横・縦にスクロールする枠(表など)。
+ * - キーボードだけでもスクロールできるように、フォーカスを受け取れるようにして名前を付ける(WCAG 2.1.1。axe の scrollable-region-focusable)
+ * - relative:読み上げ用に隠した文字(sr-only は position: absolute)を枠の中にとどめる。ないと、スマートフォンでページ全体が横にはみ出す
+ */
+export function ScrollRegion({
+  label,
+  className = "",
+  children,
+}: {
+  /** 読み上げで伝える枠の名前(例:「日々の数値の表」) */
+  label: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      role="region"
+      aria-label={label}
+      tabIndex={0}
+      className={`relative focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink ${className}`}
+    >
+      {children}
+    </div>
+  );
+}

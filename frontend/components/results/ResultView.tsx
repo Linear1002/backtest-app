@@ -21,7 +21,7 @@ import {
 
 import { Seal } from "../Seal.tsx";
 import { BackToSweepButton, SweepOriginNote } from "../sweep/SweepOriginNote.tsx";
-import { SecondaryButton } from "../ui.tsx";
+import { ScrollRegion, SecondaryButton } from "../ui.tsx";
 import { TimeSeriesCharts } from "./TimeSeriesCharts.tsx";
 
 const TONE = { up: "text-shu", down: "text-ai", flat: "text-ink" } as const;
@@ -303,7 +303,7 @@ function DailyTable({ result }: { result: BacktestResult }) {
         {open ? "日々の数値の表を閉じる" : `日々の数値を表で見る(${result.daily.length.toLocaleString("ja-JP")}日分)`}
       </button>
       {open && (
-        <div className="mt-3 max-h-[28rem] overflow-auto rounded-md border border-rule">
+        <ScrollRegion label="日々の数値の表" className="mt-3 max-h-[28rem] overflow-auto rounded-md border border-rule">
           <table className="w-full min-w-[50rem] text-[13px] tabular">
             <caption className="sr-only">日々の数値</caption>
             <thead className="sticky top-0 bg-surface-2 text-ink-2">
@@ -331,7 +331,7 @@ function DailyTable({ result }: { result: BacktestResult }) {
               ))}
             </tbody>
           </table>
-        </div>
+        </ScrollRegion>
       )}
     </div>
   );
@@ -367,7 +367,7 @@ function TradeLedger({ result }: { result: BacktestResult }) {
       ) : (
         <>
         <TradeList trades={trades} total={total} closedCount={closed.length} />
-        <div className="mt-3 hidden overflow-x-auto sm:block">
+        <ScrollRegion label="取引の一覧の表" className="mt-3 hidden overflow-x-auto sm:block">
           <table className="w-full min-w-[46rem] whitespace-nowrap text-[14px] tabular">
             <caption className="sr-only">買いから売りまでの取引の一覧</caption>
             <thead className="border-y border-rule-strong text-ink-2">
@@ -396,7 +396,7 @@ function TradeLedger({ result }: { result: BacktestResult }) {
               </tr>
             </tfoot>
           </table>
-        </div>
+        </ScrollRegion>
         {acrossSplit && (
           <p className="mt-2 text-[13px] leading-6 text-ink-3">
             ※ 分割・併合をまたいだ取引は、株数を「買った株数 → 売った株数」で示しています。売値は分割・併合の後の株価です。
@@ -521,7 +521,11 @@ function Activity({ result }: { result: BacktestResult }) {
         </p>
         <details className="mt-2">
           <summary className="cursor-pointer text-[14px] text-ink-2 hover:text-ink">一覧を開く</summary>
-          <ul className="mt-2 max-h-72 divide-y divide-rule overflow-auto border-y border-rule text-[13px] tabular">
+          <ul
+            aria-label="シグナルの一覧"
+            tabIndex={0}
+            className="relative mt-2 max-h-72 divide-y divide-rule overflow-auto border-y border-rule text-[13px] tabular focus-visible:outline-2 focus-visible:outline-ink"
+          >
             {result.signals.map((s) => (
               <li key={`${s.date}-${s.side}`} className="flex items-center justify-between gap-4 py-1.5">
                 <span className="text-ink-2">{formatDate(s.date)}</span>
@@ -561,7 +565,11 @@ function Activity({ result }: { result: BacktestResult }) {
         {result.skipped_orders.length > 0 && (
           <div>
             <h3 className="text-[18px] font-bold text-ink">資金不足で見送った買い</h3>
-            <ul className="mt-2 max-h-56 divide-y divide-rule overflow-auto border-y border-rule text-[13px] tabular">
+            <ul
+              aria-label="資金不足で見送った買いの一覧"
+              tabIndex={0}
+              className="relative mt-2 max-h-56 divide-y divide-rule overflow-auto border-y border-rule text-[13px] tabular focus-visible:outline-2 focus-visible:outline-ink"
+            >
               {result.skipped_orders.map((s) => (
                 <li key={s.date} className="flex flex-wrap justify-between gap-x-4 py-1.5">
                   <span className="text-ink-2">{formatDate(s.date)}</span>

@@ -22,7 +22,7 @@ import {
   uniqueBest,
 } from "@/lib/sweep.ts";
 
-import { SecondaryButton } from "../ui.tsx";
+import { ScrollRegion, SecondaryButton } from "../ui.tsx";
 import { formatObjective, Heatmap, SEGMENT_LABELS } from "./Heatmap.tsx";
 
 const TONE = { up: "text-shu", down: "text-ai", flat: "text-ink" } as const;
@@ -450,7 +450,7 @@ function ComboDetail({
         {isRank === null ? "選ぶ期間 −(算出不可)" : `選ぶ期間 ${count.format(ranking.in_sample_ranked)}通り中 ${isRank}位`}
         {oosRank !== null && ` ・ 検証期間 ${count.format(ranking.out_of_sample_ranked)}通り中 ${oosRank}位`}
       </p>
-      <div className="mt-3 overflow-x-auto">
+      <ScrollRegion label="選んだ組み合わせの成績の表" className="mt-3 overflow-x-auto">
         <table className="w-full min-w-[30rem] text-[14px] tabular">
           <caption className="sr-only">選んだ組み合わせの、期間ごとの成績(買い持ちと並べて)</caption>
           <thead className="border-y border-rule-strong text-ink-2">
@@ -496,7 +496,7 @@ function ComboDetail({
             ))}
           </tbody>
         </table>
-      </div>
+      </ScrollRegion>
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <SecondaryButton onClick={() => onInspect(combo.short_window, combo.long_window, "in_sample")}>
           {outOfSample ? "選ぶ期間で詳しく見る(売買の記録まで)" : "この組み合わせで詳しく見る(売買の記録まで)"}
@@ -537,7 +537,7 @@ function TopTable({
         選ぶ期間の上位{Math.min(TOP, result.count)}通り({OBJECTIVE_LABELS[objective]})
       </h3>
       <p className="mt-1 text-[13px] text-ink-3">順位は、同じ値なら同じ順位です。算出不可の組み合わせには順位を付けません。</p>
-      <div className="mt-3 overflow-x-auto">
+      <ScrollRegion label="上位の組み合わせの表" className="mt-3 overflow-x-auto">
         <table className="w-full min-w-[36rem] whitespace-nowrap text-[14px] tabular">
           <caption className="sr-only">選ぶ期間の成績のよい順</caption>
           <thead className="border-y border-rule-strong text-ink-2">
@@ -586,7 +586,7 @@ function TopTable({
             })}
           </tbody>
         </table>
-      </div>
+      </ScrollRegion>
     </section>
   );
 }
@@ -619,7 +619,7 @@ const AllCombosTable = memo(function AllCombosTable({ result, objective }: { res
         {open ? "すべての組み合わせの表を閉じる" : `すべての組み合わせを表で見る(${count.format(result.count)}通り)`}
       </button>
       {open && (
-        <div className="mt-3 max-h-[28rem] overflow-auto rounded-md border border-rule">
+        <ScrollRegion label="すべての組み合わせの表" className="mt-3 max-h-[28rem] overflow-auto rounded-md border border-rule">
           <table className="w-full min-w-[48rem] text-[13px] tabular">
             <caption className="sr-only">すべての組み合わせの成績(選ぶ期間の{OBJECTIVE_LABELS[objective]}のよい順)</caption>
             <thead className="sticky top-0 bg-surface-2 text-ink-2">
@@ -666,7 +666,7 @@ const AllCombosTable = memo(function AllCombosTable({ result, objective }: { res
               })}
             </tbody>
           </table>
-        </div>
+        </ScrollRegion>
       )}
     </div>
   );
