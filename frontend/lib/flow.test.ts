@@ -13,6 +13,7 @@ import {
   needsSymbolLoad,
   resultIsOutdated,
   runErrorMessage,
+  sweepOrigin,
   unplacedErrorMessage,
   type FlowAction,
   type FlowState,
@@ -549,22 +550,38 @@ function atSweepResultFrom(state: FlowState): FlowState {
   return flowReducer(running, { type: "sweepSucceeded", id: 12, result: sweepResult("DEMO:1001"), elapsedMs: 10 });
 }
 
-test("総当たりの1マスを詳しく見る:1組にして、その日数で確認の画面へ。総当たりの結果にも戻れる", () => {
+test("総当たりの1マスを詳しく見る:その期間だけの1組にして確認の画面へ(数字は総当たりのその行と同じ計算)", () => {
   const sweep = atSweepResult();
-  const inspect = flowReducer(sweep, { type: "inspectCombo", short: 9, long: 30 });
+  const inspect = flowReducer(sweep, { type: "inspectCombo", short: 6, long: 20, segment: "in_sample" });
   assert.equal(inspect.step, 4);
   assert.equal(inspect.form?.mode, "single");
-  assert.equal(currentRequest(inspect)?.params.short_window, 9);
-  assert.equal(currentRequest(inspect)?.params.long_window, 30);
-  assert.deepEqual([currentRequest(inspect)?.start_date, currentRequest(inspect)?.end_date], ["2024-01-04", "2025-12-30"]);
-  assert.ok(canShowSweep(inspect));
-  const back = flowReducer(inspect, { type: "showSweep" });
-  assert.equal(back.step, 5);
-  assert.equal(back.form?.mode, "sweep");
-  // 総当たりの条件(費用など)を変えたら、もう戻れない
+  const request = currentRequest(inspect)!;
+  assert.deepEqual([request.params.short_window, request.params.long_window], [6, 20]);
+  // 選ぶ期間(始まりをそろえたあとの日)〜 検証期間の前日
+  assert.deepEqual([request.start_date, request.end_date], ["2024-02-01", "2025-06-30"]);
+  assert.deepEqual(sweepOrigin(inspect.lastSweep, request), { segment: sweep.lastSweep!.result.segments[0], trials: 4 });
+  const oos = currentRequest(flowReducer(sweep, { type: "inspectCombo", short: 6, long: 20, segment: "out_of_sample" }))!;
+  assert.deepEqual([oos.start_date, oos.end_date], ["2025-07-01", "2025-12-30"]);
+  assert.equal(sweepOrigin(inspect.lastSweep, oos)?.segment.name, "out_of_sample");
+  // 日数を格子にない値に変えたら、総当たりから選んだものではなくなる
+  assert.equal(sweepOrigin(inspect.lastSweep, currentRequest(edit(inspect, { short_window: "7" }))!), null);
+});
+
+test("総当たりの結果に戻る:確認の画面からも戻れて、総当たりを実行したときの条件と画面の見方に戻る", () => {
+  const sweep = atSweepResult();
+  assert.equal(sweep.sweepView.selected, 3); // 新しい結果は、シャープレシオの1位を選んだところから
+  const viewed = flowReducer(sweep, { type: "sweepView", view: { objective: "total_return", segment: "out_of_sample", selected: 1 } });
+  const inspect = flowReducer(viewed, { type: "inspectCombo", short: 3, long: 20, segment: "out_of_sample" });
+  // 確認の画面で、費用まで変えてから戻っても
   const changed = edit(inspect, { fee_rate_pct: "0.2" });
-  assert.equal(canShowSweep(changed), false);
-  assert.equal(flowReducer(changed, { type: "showSweep" }), changed);
+  assert.ok(canShowSweep(changed));
+  const back = flowReducer(changed, { type: "showSweep" });
+  assert.equal(back.step, 5);
+  assert.deepEqual(back.form, sweep.lastSweep!.form); // 総当たりを実行したときの入力欄
+  assert.ok(canVisit(back, 5));
+  assert.deepEqual(back.sweepView, { objective: "total_return", segment: "out_of_sample", selected: 1 });
+  // 実行中・総当たりの結果がないときは戻れない
+  assert.equal(canShowSweep(atResult()), false);
 });
 
 test("総当たりを中止すると、確認の画面のまま知らせを出す。入力を変えたら知らせは消える", () => {
@@ -574,6 +591,9 @@ test("総当たりを中止すると、確認の画面のまま知らせを出�
   assert.equal(cancelled.step, 4);
   assert.equal(cancelled.sweepCancelled, true);
   assert.equal(cancelled.runError, null);
+  // 押した「中止する」は消えるので、知らせにフォーカスを移す
+  assert.equal(cancelled.focus.target, "notice");
+  assert.ok(cancelled.focus.seq > running.focus.seq);
   assert.equal(editSweep(cancelled, { short_step: "3" }).sweepCancelled, false);
 });
 
@@ -581,7 +601,7 @@ test("総当たりの実行中は、切り替え・詳しく見る・エンジ�
   const running = sweepStarted(flowReducer(sweepMode(), { type: "submitParams" }), 14);
   for (const action of [
     { type: "setMode", mode: "single" },
-    { type: "inspectCombo", short: 3, long: 20 },
+    { type: "inspectCombo", short: 3, long: 20, segment: "in_sample" },
     { type: "showSweep" },
     { type: "selectSweepEngine", id: "cuda" },
     { type: "goTo", step: 3 },

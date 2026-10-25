@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
-import { api, errorMessage, type ParamKey, type SweepStatus, type SymbolSummary } from "@/lib/api.ts";
+import { api, errorMessage, type ParamKey, type SymbolSummary } from "@/lib/api.ts";
 import {
   canShowSweep,
   canVisit,
@@ -18,6 +18,7 @@ import {
   runMode,
   selectedStrategy,
   sweepEngineInfo,
+  sweepOrigin,
   unplacedErrorMessage,
   type FlowState,
   type StepId,
@@ -25,6 +26,7 @@ import {
 import { describeYen, formatDate, formatRatePct, formatYen } from "@/lib/format.ts";
 import { parseParams, toNumber } from "@/lib/form.ts";
 import { pairCount, parseSweepGrid } from "@/lib/sweep.ts";
+import { runSweepJob } from "@/lib/sweepJob.ts";
 
 import { ResultView } from "./results/ResultView.tsx";
 import { Seal } from "./Seal.tsx";
@@ -37,8 +39,6 @@ import { SymbolStep } from "./steps/SymbolStep.tsx";
 import { SweepView } from "./sweep/SweepView.tsx";
 import { SecondaryButton } from "./ui.tsx";
 
-/** 総当たりの途中経過を問い合わせる間隔(ミリ秒) */
-const POLL_MS = 400;
 const count = new Intl.NumberFormat("ja-JP");
 
 function wait(ms: number): Promise<void> {
@@ -52,6 +52,8 @@ export function BacktestApp() {
   // いま途中経過を問い合わせている総当たりの番号(画面を閉じたら null にして、問い合わせをやめる)
   const polling = useRef<number | null>(null);
   const mainRef = useRef<HTMLElement>(null);
+  // 総当たりの「中止する」が API に届かなかったとき(実行中の表示に出す。次に実行・中止したら消す)
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   const loadCatalog = useCallback(() => {
     Promise.all([api.meta(), api.strategies()])
@@ -78,12 +80,15 @@ export function BacktestApp() {
     const frame = requestAnimationFrame(() => {
       const main = mainRef.current;
       if (!main) return;
-      if (state.focus.target === "error") {
-        // 欄のない誤り(総当たりの「組み合わせがない」など)は data-invalid-anchor の場所に出している
-        const field = main.querySelector<HTMLElement>('[aria-invalid="true"], [data-invalid-anchor="true"]');
-        if (field) {
-          field.focus({ preventScroll: true });
-          field.scrollIntoView({ block: "center" });
+      if (state.focus.target === "error" || state.focus.target === "notice") {
+        // 欄のない誤り(総当たりの「組み合わせがない」など)は data-invalid-anchor の場所に、
+        // 知らせ(総当たりを中止した、など)は data-focus-notice の場所に出している
+        const selector =
+          state.focus.target === "error" ? '[aria-invalid="true"], [data-invalid-anchor="true"]' : "[data-focus-notice]";
+        const target = main.querySelector<HTMLElement>(selector);
+        if (target) {
+          target.focus({ preventScroll: true });
+          target.scrollIntoView({ block: "center" });
           return;
         }
       }
@@ -125,57 +130,71 @@ export function BacktestApp() {
     }
   }
 
-  /** 総当たり:API にジョブを作らせ、終わるまで途中経過を問い合わせる(docs/sweep.md 10章)。 */
+  /** 総当たり:API にジョブを作らせ、終わるまで途中経過を問い合わせる(docs/sweep.md 10章。決まりは lib/sweepJob.ts)。 */
   async function runSweep() {
     const request = currentSweepRequest(state);
     if (!request || state.running) return;
     seq.current += 1;
     const id = seq.current;
     dispatch({ type: "sweepStarted", id, request });
+    setCancelError(null);
     polling.current = id;
-    try {
-      let status: SweepStatus = await api.startSweep(request);
-      while (status.status === "running") {
-        dispatch({ type: "sweepProgress", id, jobId: status.id, done: status.done, total: status.total });
-        await wait(POLL_MS);
-        if (polling.current !== id) return; // 画面を閉じた
-        status = await api.sweepStatus(status.id);
-      }
-      if (status.status === "done" && status.result) {
-        dispatch({ type: "sweepSucceeded", id, result: status.result, elapsedMs: status.elapsed_ms });
-      } else if (status.status === "cancelled") {
+    const outcome = await runSweepJob(request, {
+      api,
+      wait,
+      isCurrent: () => polling.current === id,
+      onProgress: (status) => dispatch({ type: "sweepProgress", id, jobId: status.id, done: status.done, total: status.total }),
+    });
+    if (polling.current === id) polling.current = null;
+    switch (outcome.kind) {
+      case "done":
+        dispatch({ type: "sweepSucceeded", id, result: outcome.status.result!, elapsedMs: outcome.status.elapsed_ms });
+        return;
+      case "cancelled":
         dispatch({ type: "sweepCancelled", id });
-      } else {
-        dispatch({
-          type: "sweepFailed",
-          id,
-          message: status.error?.detail ?? "総当たりを実行できませんでした",
-          fieldErrors: {},
-        });
+        return;
+      case "failed":
+        dispatch({ type: "sweepFailed", id, message: outcome.message, fieldErrors: {} });
+        return;
+      case "error": {
+        const fieldErrors = fieldErrorsFrom(outcome.error, request);
+        const message =
+          Object.keys(fieldErrors).length > 0
+            ? unplacedErrorMessage(outcome.error, request)
+            : runErrorMessage(outcome.error, request, "総当たりを実行できませんでした");
+        dispatch({ type: "sweepFailed", id, message, fieldErrors });
+        return;
       }
-    } catch (e: unknown) {
-      const fieldErrors = fieldErrorsFrom(e, request);
-      const message =
-        Object.keys(fieldErrors).length > 0
-          ? unplacedErrorMessage(e, request)
-          : runErrorMessage(e, request, "総当たりを実行できませんでした");
-      dispatch({ type: "sweepFailed", id, message, fieldErrors });
-    } finally {
-      if (polling.current === id) polling.current = null;
+      case "stopped":
+        return; // 画面を閉じた
     }
   }
 
   function cancelSweep() {
     const running = state.running;
     if (running?.kind !== "sweep" || !running.jobId) return;
-    // 中止の結果は、問い合わせの続き(status が cancelled)で受け取る
-    api.cancelSweep(running.jobId).catch(() => undefined);
+    setCancelError(null);
+    // 中止できたことは、問い合わせの続き(status が cancelled)で受け取る。頼めなかったときだけ、ここで知らせる
+    api
+      .cancelSweep(running.jobId)
+      .catch((e: unknown) => setCancelError(errorMessage(e, "中止できませんでした。もう一度押してください")));
   }
 
   // 結果の動きを再生し終えたら記録する(dispatch は変わらないので、この関数も描き直しで変わらない)
   const onAnimated = useCallback((id: number) => dispatch({ type: "resultAnimated", id }), []);
+  // 総当たりの結果の画面に渡す関数も、描き直しで変わらないようにする(ヒートマップのマスを描き直さないため)
+  const onSweepView = useCallback(
+    (view: Partial<FlowState["sweepView"]>) => dispatch({ type: "sweepView", view }),
+    [],
+  );
+  const onInspect = useCallback(
+    (short: number, long: number, segment: "in_sample" | "out_of_sample") =>
+      dispatch({ type: "inspectCombo", short, long, segment }),
+    [],
+  );
 
   const goTo = (step: StepId) => dispatch({ type: "goTo", step });
+  const backToSweep = canShowSweep(state) ? () => dispatch({ type: "showSweep" }) : null;
   const strategy = selectedStrategy(state);
   const meta = state.catalog?.meta ?? null;
   const mode = runMode(state);
@@ -286,6 +305,8 @@ export function BacktestApp() {
                 error={state.runError}
                 outdated={resultIsOutdated(state)}
                 onRun={run}
+                origin={sweepOrigin(state.lastSweep, request)}
+                onBackToSweep={backToSweep}
               />
             ) : (
               inputError
@@ -305,6 +326,7 @@ export function BacktestApp() {
                 running={running !== null}
                 progress={running?.kind === "sweep" && running.jobId ? { done: running.done, total: running.total } : null}
                 cancelled={state.sweepCancelled}
+                cancelError={cancelError}
                 error={state.runError}
                 outdated={resultIsOutdated(state)}
                 onRun={runSweep}
@@ -321,16 +343,19 @@ export function BacktestApp() {
               onAnimated={onAnimated}
               onEditParams={() => goTo(3)}
               onRestart={() => goTo(1)}
-              onBackToSweep={canShowSweep(state) ? () => dispatch({ type: "showSweep" }) : null}
+              onBackToSweep={backToSweep}
+              origin={sweepOrigin(state.lastSweep, state.last.request)}
             />
           )}
           {state.step === 5 && mode === "sweep" && state.lastSweep && (
             <SweepView
               key={state.lastSweep.id}
               record={state.lastSweep}
+              view={state.sweepView}
+              onViewChange={onSweepView}
               onEditParams={() => goTo(3)}
               onRestart={() => goTo(1)}
-              onInspect={(short, long) => dispatch({ type: "inspectCombo", short, long })}
+              onInspect={onInspect}
             />
           )}
         </main>

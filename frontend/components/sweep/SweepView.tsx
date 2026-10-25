@@ -2,11 +2,12 @@
 
 // 総当たりの結果の画面(docs/sweep.md 7章・8章)。
 // 何通り試したか・選ぶ期間の1位・その組み合わせの検証期間の成績を、いちばん上に並べて見せる(過剰最適化を隠さない)。
+// 画面の見方(並べる基準・色を付ける期間・選んだ組み合わせ)は lib/flow.ts が持つ(1組の結果を見て戻ってきても残る)。
 
-import { useId, useState } from "react";
+import { memo, useCallback, useId, useState } from "react";
 
-import type { Objective, SegmentName, SweepCombo, SweepMetrics, SweepResult } from "@/lib/api.ts";
-import type { SweepRecord } from "@/lib/flow.ts";
+import type { Objective, SegmentName, SweepCombo, SweepMetrics, SweepResult, SweepSegment } from "@/lib/api.ts";
+import type { SweepRecord, SweepViewState } from "@/lib/flow.ts";
 import { direction, formatDate, formatDateTimeJst, formatNumber, formatPercent, formatRatePct, formatYen } from "@/lib/format.ts";
 import {
   competitionRank,
@@ -15,6 +16,8 @@ import {
   OBJECTIVES,
   rankingFor,
   segmentValues,
+  sharpeStandardError,
+  uniqueBest,
 } from "@/lib/sweep.ts";
 
 import { SecondaryButton } from "../ui.tsx";
@@ -26,23 +29,28 @@ const TOP = 10;
 
 export function SweepView({
   record,
+  view,
+  onViewChange,
   onEditParams,
   onRestart,
   onInspect,
 }: {
   record: SweepRecord;
+  view: SweepViewState;
+  onViewChange: (view: Partial<SweepViewState>) => void;
   onEditParams: () => void;
   onRestart: () => void;
-  /** 1つの組み合わせを、通常のバックテストで詳しく見る */
-  onInspect: (short: number, long: number) => void;
+  /** 1つの組み合わせを、その期間の通常のバックテストで詳しく見る */
+  onInspect: (short: number, long: number, segment: SegmentName) => void;
 }) {
   const headingId = useId();
   const result = record.result;
-  const [objective, setObjective] = useState<Objective>("sharpe_ratio");
-  const [segment, setSegment] = useState<SegmentName>("in_sample");
+  const { objective, segment, selected } = view;
   const ranking = rankingFor(result.rankings, objective);
-  const [selected, setSelected] = useState<number | null>(ranking.best_index);
+  const best = uniqueBest(ranking);
   const hasHoldout = result.segments.some((s) => s.name === "out_of_sample");
+  // ヒートマップのマスを描き直さないように、描き直しで変わらない関数にする
+  const select = useCallback((index: number) => onViewChange({ selected: index }), [onViewChange]);
 
   return (
     <article aria-labelledby={headingId} className="space-y-10">
@@ -51,9 +59,8 @@ export function SweepView({
         result={result}
         objective={objective}
         onObjective={(o) => {
-          setObjective(o);
-          // 基準を変えたら、その基準の1位を選び直す
-          setSelected(rankingFor(result.rankings, o).best_index);
+          // 基準を変えたら、その基準の1位を選び直す(同率1位なら選ばない)
+          onViewChange({ objective: o, selected: uniqueBest(rankingFor(result.rankings, o)) });
         }}
         hasHoldout={hasHoldout}
       />
@@ -69,7 +76,7 @@ export function SweepView({
                   key={s}
                   type="button"
                   aria-pressed={segment === s}
-                  onClick={() => setSegment(s)}
+                  onClick={() => onViewChange({ segment: s })}
                   className={`rounded-full px-3 py-1 text-[13px] ${
                     segment === s ? "bg-ink text-paper" : "text-ink-2 ring-1 ring-rule-strong hover:bg-surface-2"
                   }`}
@@ -80,37 +87,42 @@ export function SweepView({
             </div>
           )}
         </div>
+        {segment === "out_of_sample" && (
+          <p className="mb-3 rounded-md border border-rule-strong px-3 py-2 text-[13px] leading-6 text-ink-2">
+            検証期間の色は、選ぶ期間で選んだ組み合わせを<b className="text-ink">確かめるため</b>のものです。
+            ここで良い組み合わせを選び直すと、検証期間も選ぶのに使ったことになり、確かめたことになりません。
+          </p>
+        )}
         <Heatmap
           key={objective}
           result={result}
           objective={objective}
           segment={segment}
-          bestIndex={ranking.best_index}
+          bestIndex={best}
           selected={selected}
-          onSelect={setSelected}
+          onSelect={select}
         />
         <p className="mt-3 text-[13px] leading-6 text-ink-3">
-          1位のまわりも良い(なだらかな山)なら、たまたまではない可能性があります。1マスだけ飛び抜けているなら疑ってください。
+          1位のまわりも良い(なだらかな山)なら、日数を少し変えても成績が崩れにくいことは分かります。ただし、となりの組み合わせはほとんど同じ売買をするので、
+          たまたまではない証拠にはなりません。1マスだけ飛び抜けているなら疑ってください。
           {hasHoldout && "「検証期間」に切り替えると、選ぶのに使っていない期間で同じ組み合わせがどうだったかを見られます(並べ替えは選ぶ期間のまま)。"}
         </p>
         <AllCombosTable result={result} objective={objective} />
       </section>
       {selected !== null && (
-        <ComboDetail
-          result={result}
-          index={selected}
-          objective={objective}
-          isBest={selected === ranking.best_index}
-          onInspect={onInspect}
-        />
+        <ComboDetail result={result} index={selected} objective={objective} isBest={selected === best} onInspect={onInspect} />
       )}
-      <TopTable result={result} objective={objective} onSelect={setSelected} />
+      <TopTable result={result} objective={objective} onSelect={select} />
       <Notes result={result} elapsedMs={record.elapsedMs} />
     </article>
   );
 }
 
 // --- 見出し ---------------------------------------------------------------------------
+
+function segmentPeriod(segment: SweepSegment): string {
+  return `${formatDate(segment.first_business_day)}〜${formatDate(segment.last_business_day)}(${count.format(segment.business_days)}営業日)`;
+}
 
 function Header({
   result,
@@ -140,11 +152,15 @@ function Header({
           {g.long_step}日ごと)
         </p>
         <p className="mt-0.5 text-[13px] text-ink-3 tabular">
-          選ぶ期間 {formatDate(inSample.first_business_day)}〜{formatDate(inSample.last_business_day)}({count.format(inSample.business_days)}営業日)
-          {outOfSample
-            ? ` ・ 検証期間 ${formatDate(outOfSample.first_business_day)}〜${formatDate(outOfSample.last_business_day)}(${count.format(outOfSample.business_days)}営業日)`
-            : " ・ 検証期間なし"}
+          {outOfSample ? "選ぶ期間" : "期間"} {segmentPeriod(inSample)}
+          {outOfSample ? ` ・ 検証期間 ${segmentPeriod(outOfSample)}` : " ・ 検証期間なし"}
         </p>
+        {inSample.skipped_business_days > 0 && (
+          <p className="mt-0.5 text-[13px] text-ink-3">
+            ※ すべての組み合わせを同じ日から比べるため、{formatDate(inSample.requested_start_date)}からの
+            {count.format(inSample.skipped_business_days)}営業日は、移動平均を作るため(ウォームアップ)にだけ使いました。
+          </p>
+        )}
         <p className="mt-0.5 text-[13px] text-ink-3">
           手数料率 {formatRatePct(result.params.fee_rate_pct)}・スリッページ率 {formatRatePct(result.params.slippage_rate_pct)}・初期資金{" "}
           {formatYen(result.params.initial_cash)}・売買単位 {result.params.lot_size}株
@@ -173,8 +189,13 @@ function Summary({
 }) {
   const headingId = useId();
   const ranking = rankingFor(result.rankings, objective);
-  const best = ranking.best_index !== null ? result.combos[ranking.best_index] : null;
+  const bestIndex = uniqueBest(ranking);
+  const best = bestIndex !== null ? result.combos[bestIndex] : null;
+  const tied = ranking.best_tie_count > 1 ? ranking.best_tie_count : 0;
+  const tiedValue = tied && ranking.best_index !== null ? result.combos[ranking.best_index].in_sample : null;
   const value = (m: SweepMetrics | null) => formatObjective(m ? (m[objective] as number | null) : null, objective);
+  const outOfSample = result.segments.find((s) => s.name === "out_of_sample");
+  const error = outOfSample ? sharpeStandardError(outOfSample.business_days, result.params.trading_days_per_year) : null;
   return (
     <section aria-labelledby={headingId}>
       <div className="flex flex-wrap items-baseline justify-between gap-3">
@@ -197,6 +218,11 @@ function Summary({
           ))}
         </div>
       </div>
+      {objective === "max_drawdown" && (
+        <p className="mt-2 text-[13px] leading-6 text-ink-3">
+          ※ 最大ドローダウンで並べると、売買の少ない組み合わせほど上に来ます(株を一度も持たなければ0%)。
+        </p>
+      )}
       <dl className="mt-3 grid border-t border-rule sm:grid-cols-2">
         <Row label="試した組み合わせ" help="たくさん試すほど、たまたま良いものが見つかりやすくなります">
           <span className="text-[22px]">{count.format(result.count)}通り</span>
@@ -208,6 +234,16 @@ function Summary({
                 短期{best.short_window}日・長期{best.long_window}日
               </span>
               <span className="text-[15px] font-normal text-ink-2">{value(best.in_sample)}</span>
+              {best.in_sample.holding_days === 0 && (
+                <span className="block text-[13px] font-normal text-ink-2">この期間は一度も株を持っていません</span>
+              )}
+            </>
+          ) : tied ? (
+            <>
+              <span className="block text-[18px]">同率1位が{count.format(tied)}通り</span>
+              <span className="text-[13px] font-normal text-ink-2">
+                すべて{value(tiedValue)}のため、1位は決められません
+              </span>
             </>
           ) : (
             <span className="text-[15px] font-normal text-ink-2">値を出せる組み合わせがありません</span>
@@ -220,19 +256,26 @@ function Summary({
                 <>
                   <span className="block text-[22px]">{value(best.out_of_sample)}</span>
                   {ranking.best_out_of_sample_rank !== null && (
-                    <span className="text-[14px] font-normal text-ink-2">
+                    <span className="block text-[14px] font-normal text-ink-2">
                       検証期間では {count.format(ranking.out_of_sample_ranked)}通り中 {ranking.best_out_of_sample_rank}位
                     </span>
                   )}
+                  {objective === "sharpe_ratio" && error !== null && (
+                    <span className="block text-[12px] font-normal text-ink-3">偶然だけでも ±{error.toFixed(1)} 程度ぶれます(目安)</span>
+                  )}
                 </>
               ) : (
-                "−"
+                <span className="text-[15px] font-normal text-ink-2">1位が決まらないため出しません</span>
               )}
             </Row>
-            <Row label="順位の相関(選ぶ期間 ↔ 検証期間)" help={correlationReading(ranking.rank_correlation)}>
-              <span className="text-[22px]">
+            <Row
+              label="順位の相関(選ぶ期間 ↔ 検証期間)"
+              help={correlationReading(ranking.rank_correlation, ranking.correlation_pairs)}
+            >
+              <span className="block text-[22px]">
                 {ranking.rank_correlation === null ? "−" : formatNumber(ranking.rank_correlation)}
               </span>
+              <span className="text-[13px] font-normal text-ink-2">{count.format(ranking.correlation_pairs)}通りで計算</span>
             </Row>
           </>
         ) : (
@@ -272,7 +315,10 @@ function Row({ label, help, children }: { label: string; help: string; children:
 
 // --- 選んだ組み合わせ ------------------------------------------------------------------
 
-const DETAIL_ROWS: { label: string; render: (m: SweepMetrics, tradingDays: number) => React.ReactNode }[] = [
+const DETAIL_ROWS: {
+  label: string;
+  render: (m: SweepMetrics, tradingDays: number, segment: SweepSegment) => React.ReactNode;
+}[] = [
   {
     label: "総リターン",
     render: (m) => <span className={TONE[direction(m.total_return)]}>{formatPercent(m.total_return, { signed: true })}</span>,
@@ -294,6 +340,10 @@ const DETAIL_ROWS: { label: string; render: (m: SweepMetrics, tradingDays: numbe
       `${formatPercent(m.win_rate, { digits: 1, nullLabel: "−" })}${m.trade_count > 0 ? `(${m.winning_trades}勝${m.trade_count - m.winning_trades}敗)` : ""}`,
   },
   { label: "取引回数", render: (m) => `${m.trade_count}回` },
+  {
+    label: "株を持っていた日",
+    render: (m, _days, segment) => `${count.format(m.holding_days)} / ${count.format(segment.business_days)}営業日`,
+  },
   { label: "資金不足で見送り", render: (m) => `${m.insufficient_cash_count}回` },
   { label: "最終資産", render: (m) => formatYen(m.final_equity) },
 ];
@@ -309,32 +359,31 @@ function ComboDetail({
   index: number;
   objective: Objective;
   isBest: boolean;
-  onInspect: (short: number, long: number) => void;
+  onInspect: (short: number, long: number, segment: SegmentName) => void;
 }) {
   const headingId = useId();
   const combo = result.combos[index];
   const ranking = rankingFor(result.rankings, objective);
-  const isRank = ranking.order.indexOf(index) + 1;
-  const oosValues = segmentValues(result.combos, "out_of_sample", objective);
-  const oosRank = combo.out_of_sample ? competitionRank(oosValues, index, objective) : null;
+  const isRank = competitionRank(segmentValues(result.combos, "in_sample", objective), index, objective);
+  const oosRank = combo.out_of_sample
+    ? competitionRank(segmentValues(result.combos, "out_of_sample", objective), index, objective)
+    : null;
   const days = result.params.trading_days_per_year;
+  const inSample = result.segments.find((s) => s.name === "in_sample")!;
+  const outOfSample = result.segments.find((s) => s.name === "out_of_sample") ?? null;
   return (
     <section aria-labelledby={headingId}>
       {/* ヒートマップや表で選んだときに、読み上げで選んだことが分かるように */}
       <p className="sr-only" aria-live="polite">
         短期{combo.short_window}日・長期{combo.long_window}日を選びました
       </p>
-      <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <h3 id={headingId} className="text-[18px] font-bold text-ink">
-          選んだ組み合わせ:短期{combo.short_window}日・長期{combo.long_window}日
-          {isBest && <span className="ml-2 text-[13px] font-normal text-ink-2">選ぶ期間の1位</span>}
-        </h3>
-        <SecondaryButton onClick={() => onInspect(combo.short_window, combo.long_window)}>
-          この組み合わせで詳しく見る(売買の記録まで)
-        </SecondaryButton>
-      </div>
+      <h3 id={headingId} className="text-[18px] font-bold text-ink">
+        選んだ組み合わせ:短期{combo.short_window}日・長期{combo.long_window}日
+        {isBest && <span className="ml-2 text-[13px] font-normal text-ink-2">選ぶ期間の1位</span>}
+      </h3>
       <p className="mt-1 text-[13px] text-ink-3">
-        {OBJECTIVE_LABELS[objective]}の順位:選ぶ期間 {count.format(result.count)}通り中 {isRank}位
+        {OBJECTIVE_LABELS[objective]}の順位:
+        {isRank === null ? "選ぶ期間 −(算出不可)" : `選ぶ期間 ${count.format(ranking.in_sample_ranked)}通り中 ${isRank}位`}
         {oosRank !== null && ` ・ 検証期間 ${count.format(ranking.out_of_sample_ranked)}通り中 ${oosRank}位`}
       </p>
       <div className="mt-3 overflow-x-auto">
@@ -361,13 +410,28 @@ function ComboDetail({
                 <th scope="row" className="py-2 pr-3 text-left font-normal text-ink-2">
                   {row.label}
                 </th>
-                <td className="px-3 py-2 text-right text-ink">{row.render(combo.in_sample, days)}</td>
-                {combo.out_of_sample && <td className="py-2 pl-3 text-right text-ink">{row.render(combo.out_of_sample, days)}</td>}
+                <td className="px-3 py-2 text-right text-ink">{row.render(combo.in_sample, days, inSample)}</td>
+                {combo.out_of_sample && outOfSample && (
+                  <td className="py-2 pl-3 text-right text-ink">{row.render(combo.out_of_sample, days, outOfSample)}</td>
+                )}
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <SecondaryButton onClick={() => onInspect(combo.short_window, combo.long_window, "in_sample")}>
+          {outOfSample ? "選ぶ期間で詳しく見る(売買の記録まで)" : "この組み合わせで詳しく見る(売買の記録まで)"}
+        </SecondaryButton>
+        {outOfSample && (
+          <SecondaryButton onClick={() => onInspect(combo.short_window, combo.long_window, "out_of_sample")}>
+            検証期間で詳しく見る
+          </SecondaryButton>
+        )}
+      </div>
+      <p className="mt-2 text-[12px] leading-5 text-ink-3">
+        その期間だけを1組のバックテストとして計算し直します(この表の数字と同じになります)。
+      </p>
     </section>
   );
 }
@@ -386,6 +450,7 @@ function TopTable({
   const headingId = useId();
   const ranking = rankingFor(result.rankings, objective);
   const hasHoldout = result.combos.some((c) => c.out_of_sample !== null);
+  const isValues = segmentValues(result.combos, "in_sample", objective);
   const oosValues = segmentValues(result.combos, "out_of_sample", objective);
   const top = ranking.order.slice(0, TOP);
   return (
@@ -393,6 +458,7 @@ function TopTable({
       <h3 id={headingId} className="text-[18px] font-bold text-ink">
         選ぶ期間の上位{Math.min(TOP, result.count)}通り({OBJECTIVE_LABELS[objective]})
       </h3>
+      <p className="mt-1 text-[13px] text-ink-3">順位は、同じ値なら同じ順位です。算出不可の組み合わせには順位を付けません。</p>
       <div className="mt-3 overflow-x-auto">
         <table className="w-full min-w-[36rem] whitespace-nowrap text-[14px] tabular">
           <caption className="sr-only">選ぶ期間の成績のよい順</caption>
@@ -407,12 +473,13 @@ function TopTable({
             </tr>
           </thead>
           <tbody className="divide-y divide-rule">
-            {top.map((index, i) => {
+            {top.map((index) => {
               const combo = result.combos[index];
+              const isRank = competitionRank(isValues, index, objective);
               const oosRank = combo.out_of_sample ? competitionRank(oosValues, index, objective) : null;
               return (
                 <tr key={index}>
-                  <td className="py-2 pr-3 text-left text-ink-2">{i + 1}</td>
+                  <td className="py-2 pr-3 text-left text-ink-2">{isRank ?? "−"}</td>
                   <td className="px-3 py-2 text-left">
                     <button
                       type="button"
@@ -446,11 +513,15 @@ function TopTable({
   );
 }
 
-/** すべての組み合わせの表(ヒートマップの表版。色を見分けにくいときも、値はここで読める)。 */
-function AllCombosTable({ result, objective }: { result: SweepResult; objective: Objective }) {
+/**
+ * すべての組み合わせの表(ヒートマップの表版。色を見分けにくいときも、値はここで読める)。
+ * 2,000行になることがあるので、マスを選んでも描き直さないようにしてある(memo)。
+ */
+const AllCombosTable = memo(function AllCombosTable({ result, objective }: { result: SweepResult; objective: Objective }) {
   const [open, setOpen] = useState(false);
   const ranking = rankingFor(result.rankings, objective);
   const hasHoldout = result.combos.some((c) => c.out_of_sample !== null);
+  const isValues = segmentValues(result.combos, "in_sample", objective);
   const cell = (combo: SweepCombo, which: "in_sample" | "out_of_sample", key: Objective) => {
     const m = combo[which];
     return m ? formatObjective(m[key] as number | null, key) : "−";
@@ -489,11 +560,11 @@ function AllCombosTable({ result, objective }: { result: SweepResult; objective:
               </tr>
             </thead>
             <tbody className="divide-y divide-rule">
-              {ranking.order.map((index, i) => {
+              {ranking.order.map((index) => {
                 const combo = result.combos[index];
                 return (
                   <tr key={index}>
-                    <td className="px-3 py-1.5 text-left text-ink-2">{i + 1}</td>
+                    <td className="px-3 py-1.5 text-left text-ink-2">{competitionRank(isValues, index, objective) ?? "−"}</td>
                     <td className="px-3 py-1.5 text-left">{combo.short_window}日</td>
                     <td className="px-3 py-1.5 text-left">{combo.long_window}日</td>
                     {OBJECTIVES.map((o) => (
@@ -517,7 +588,7 @@ function AllCombosTable({ result, objective }: { result: SweepResult; objective:
       )}
     </div>
   );
-}
+});
 
 // --- 注記 -------------------------------------------------------------------------------
 

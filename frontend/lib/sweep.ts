@@ -63,14 +63,29 @@ export function gridPairs(grid: SweepGrid): [number, number][] {
   return pairs;
 }
 
-/** 組み合わせの数(一覧を作らずに数える。入力のたびに数えるので、大きな格子でも重くしない)。 */
+/** 候補 min, min + step, … , ≦ max の数。 */
+function valueCount(min: number, max: number, step: number): number {
+  return max < min ? 0 : Math.floor((max - min) / step) + 1;
+}
+
+/**
+ * 組み合わせの数(一覧を作らずに数える。入力のたびに何回も呼ばれるので、短期の候補の数だけの計算で済ませる)。
+ * 短期 s ごとに、長期の候補のうち s より大きいものの数を足す。
+ */
 export function pairCount(grid: SweepGrid): number {
-  const longs = gridValues(grid.long_min, grid.long_max, grid.long_step);
+  const longs = valueCount(grid.long_min, grid.long_max, grid.long_step);
   let total = 0;
   for (const short of gridValues(grid.short_min, grid.short_max, grid.short_step)) {
-    total += longs.filter((long) => short < long).length;
+    // 長期の候補のうち short 以下のもの(long_min + k × step ≦ short)の数を引く
+    const notLonger = short < grid.long_min ? 0 : Math.min(longs, Math.floor((short - grid.long_min) / grid.long_step) + 1);
+    total += longs - notLonger;
   }
   return total;
+}
+
+/** いちばん長い長期日数(組み合わせがあるとき。選ぶ期間の始まりをそろえる日数。docs/sweep.md 3章)。 */
+export function longestWindow(grid: SweepGrid): number {
+  return grid.long_min + (valueCount(grid.long_min, grid.long_max, grid.long_step) - 1) * grid.long_step;
 }
 
 /**
@@ -117,6 +132,13 @@ export function parseSweepGrid(
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const DAY_MS = 86_400_000;
 
+/** YYYY-MM-DD の形で、暦にある日付か(2025-02-30 などは false。API も日付として受け付けない)。 */
+export function isCalendarDate(text: string): boolean {
+  if (!ISO_DATE.test(text)) return false;
+  const [y, m, d] = text.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toISOString().slice(0, 10) === text;
+}
+
 function toDay(iso: string): number {
   const [y, m, d] = iso.split("-").map(Number);
   return Date.UTC(y, m - 1, d);
@@ -155,7 +177,7 @@ export function holdoutStart(
 /** 検証期間の開始日の誤り(API と同じ文)。営業日の数は API だけが確かめる(画面はデータを持たないため)。 */
 export function validateHoldout(period: { start_date: string; end_date: string }, holdout: string | null): string | null {
   if (holdout === null) return null;
-  if (!ISO_DATE.test(holdout)) return "日付は YYYY-MM-DD の形で入力してください";
+  if (!isCalendarDate(holdout)) return "日付は YYYY-MM-DD の形で入力してください";
   if (!(period.start_date < holdout && holdout <= period.end_date)) {
     return "検証期間の開始日は、期間の開始日より後、終了日以前の日付にしてください";
   }
@@ -197,18 +219,25 @@ export function rankingFor(rankings: readonly SweepRanking[], objective: Objecti
 }
 
 /**
- * ヒートマップの色の強さを決める「いちばん大きい値」。選ぶ期間と検証期間で同じものを使う
- * (切り替えても、同じ色が同じ値を表すように)。値がなければ 1。
+ * ヒートマップの色の強さを決める「いちばん大きい値」。**選ぶ期間の値だけ**で決める(docs/sweep.md 8章)。
+ * 検証期間の値を入れると、検証期間の情報が「選ぶ画面」の色の濃さに入り込んでしまうため。
+ * 検証期間のヒートマップも同じ物差しで塗る(切り替えても同じ色が同じ値。はみ出す値は端の色)。値がなければ 1。
  */
 export function heatScaleMax(combos: readonly SweepCombo[], objective: Objective): number {
   let max = 0;
   for (const combo of combos) {
-    for (const m of [combo.in_sample, combo.out_of_sample]) {
-      const v = metricValue(m, objective);
-      if (v !== null) max = Math.max(max, Math.abs(v));
-    }
+    const v = metricValue(combo.in_sample, objective);
+    if (v !== null) max = Math.max(max, Math.abs(v));
   }
   return max > 0 ? max : 1;
+}
+
+/** 検証期間の値のうち、物差し(選ぶ期間の最大)を超えて端の色にそろえたものがあるか。 */
+export function exceedsScale(combos: readonly SweepCombo[], objective: Objective, scaleMax: number): boolean {
+  return combos.some((c) => {
+    const v = metricValue(c.out_of_sample, objective);
+    return v !== null && Math.abs(v) > scaleMax;
+  });
 }
 
 /**
@@ -235,13 +264,39 @@ export function heatColor(tone: HeatTone): string {
   return `color-mix(in oklab, ${pole} ${percent}%, var(--heat-mid))`;
 }
 
-/** 順位相関の読み方(目安)。 */
-export function correlationReading(rho: number | null): string {
-  if (rho === null) return "比べられる組み合わせが足りないため、計算していません";
-  if (rho >= 0.5) return "ある程度そろっています(それでも、たまたまの可能性は残ります)";
-  if (rho >= 0.2) return "弱い関係しかありません";
-  if (rho > -0.2) return "ほとんど関係がありません。選ぶ期間の順位は、検証期間の順位を予想できていません";
-  return "逆の関係です。選ぶ期間で良かった組み合わせほど、検証期間では悪くなっています";
+/** 順位相関の読み方の目安を出す、組み合わせの数の下限(これより少ないと、たまたまの値が大きく出る)。 */
+export const MIN_CORRELATION_PAIRS = 10;
+
+/**
+ * 順位相関の読み方(目安)。pairs は計算に使った組み合わせの数(両方の期間に値があるもの)。
+ * となりの組み合わせはほとんど同じ売買をするので、組み合わせの数ほどの独立した証拠にはならない(docs/sweep.md 7章)。
+ */
+export function correlationReading(rho: number | null, pairs: number): string {
+  if (rho === null) {
+    return pairs >= 3
+      ? "どちらかの期間で、すべての組み合わせが同じ値のため計算できません"
+      : "両方の期間に値がある組み合わせが3つ未満のため、計算していません";
+  }
+  if (pairs < MIN_CORRELATION_PAIRS) {
+    return `組み合わせが${pairs}通りと少ないため、読み方の目安は出しません(少ないと、たまたま大きな値が出ます)`;
+  }
+  if (rho >= 0.5) return "目安:ある程度そろっています(それでも、たまたまの可能性は残ります)";
+  if (rho >= 0.2) return "目安:弱い関係しかありません";
+  if (rho > -0.2) return "目安:ほとんど関係がありません。選ぶ期間の順位は、検証期間の順位を予想できていません";
+  return "目安:逆の関係です。選ぶ期間で良かった組み合わせほど、検証期間では悪くなっています";
+}
+
+/**
+ * 年率に直したシャープレシオの標準誤差の目安 √(年間の営業日数 / 日次リターンの数)。
+ * API の注記(backend/api/sweep_convert.py の sharpe_standard_error)と同じ式。
+ */
+export function sharpeStandardError(businessDays: number, tradingDaysPerYear: number): number {
+  return Math.sqrt(tradingDaysPerYear / Math.max(1, businessDays - 1));
+}
+
+/** 選ぶ期間の1位が1つに決まるときだけ、その位置(同率1位なら null)。 */
+export function uniqueBest(ranking: SweepRanking): number | null {
+  return ranking.best_tie_count === 1 ? ranking.best_index : null;
 }
 
 /** 組み合わせごとの、期間の基準の値(combos と同じ順番)。 */

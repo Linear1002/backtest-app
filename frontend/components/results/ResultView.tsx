@@ -19,6 +19,7 @@ import {
 } from "@/lib/format.ts";
 
 import { Seal } from "../Seal.tsx";
+import { SweepOriginNote, type SweepOrigin } from "../sweep/SweepOriginNote.tsx";
 import { SecondaryButton } from "../ui.tsx";
 import { TimeSeriesCharts } from "./TimeSeriesCharts.tsx";
 
@@ -37,6 +38,7 @@ export function ResultView({
   onEditParams,
   onRestart,
   onBackToSweep = null,
+  origin = null,
 }: {
   record: RunRecord;
   /** 結果が出たときの動きを再生するか(同じ結果に戻ってきたときは再生しない) */
@@ -44,8 +46,10 @@ export function ResultView({
   onAnimated: (id: number) => void;
   onEditParams: () => void;
   onRestart: () => void;
-  /** 同じ条件の総当たりの結果があれば、そこへ戻る */
+  /** 総当たりの結果があれば、そこへ戻る */
   onBackToSweep?: (() => void) | null;
+  /** 総当たりの結果から「詳しく見る」で開いた結果なら、その期間と試した数 */
+  origin?: SweepOrigin | null;
 }) {
   const headingId = useId();
   const result = record.result;
@@ -68,6 +72,7 @@ export function ResultView({
         onRestart={onRestart}
         onBackToSweep={onBackToSweep}
       />
+      {origin && <SweepOriginNote origin={origin} done />}
       <Metrics result={result} />
       <section aria-label="チャート" className="rounded-md border border-rule bg-surface p-3 sm:p-5">
         <TimeSeriesCharts result={result} actions={actions} animate={animate} />

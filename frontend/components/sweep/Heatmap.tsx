@@ -2,14 +2,16 @@
 
 // 総当たりのヒートマップ(縦 = 短期の日数、横 = 長期の日数)。docs/sweep.md 8章:「山」の形を見るためのもの。
 // - マスの色:シャープレシオ・総リターンは 0 を中心に、プラスは朱・マイナスは藍(DESIGN.md)。最大ドローダウンは大きいほど濃い藍
-// - 選ぶ期間と検証期間で同じ物差しを使う(切り替えても、同じ色が同じ値を表す)
+// - 色の物差しは選ぶ期間の値だけで決める(検証期間の情報を選ぶ画面に入れないため)。検証期間も同じ物差しで塗る
 // - キーボード:矢印キーでマスを動き、Enter・スペースで選ぶ(WAI-ARIA の grid)。値は上の読み取り欄・下の表でも読める
+// - マスがたくさんあるときも1マスの幅を保ち、はみ出す分は横にスクロールする
+// - マスの一覧(HeatGrid)は、マウスで指すマスが変わっても描き直さない(読み取り欄だけを描き直す)
 
-import { useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 
 import type { Objective, SegmentName, SweepResult } from "@/lib/api.ts";
 import { formatNumber, formatPercent } from "@/lib/format.ts";
-import { heatColor, heatScaleMax, heatTone, metricValue, OBJECTIVE_LABELS } from "@/lib/sweep.ts";
+import { exceedsScale, heatColor, heatScaleMax, heatTone, metricValue, OBJECTIVE_LABELS } from "@/lib/sweep.ts";
 
 export const SEGMENT_LABELS: Record<SegmentName, string> = { in_sample: "選ぶ期間", out_of_sample: "検証期間" };
 
@@ -22,6 +24,15 @@ export function formatObjective(value: number | null, objective: Objective): str
 
 type Position = { row: number; col: number };
 
+/** 列の数に合わせた、1マスの最小の幅とすき間(px)。 */
+function cellSizing(columns: number): { minWidth: number; gap: number } {
+  if (columns > 60) return { minWidth: 6, gap: 1 };
+  if (columns > 30) return { minWidth: 10, gap: 1 };
+  return { minWidth: 16, gap: 2 };
+}
+
+const ROW_HEADER_PX = 52; // 縦の目盛り(短期の日数)の列の幅
+
 export function Heatmap({
   result,
   objective,
@@ -33,7 +44,7 @@ export function Heatmap({
   result: SweepResult;
   objective: Objective;
   segment: SegmentName;
-  /** 選ぶ期間の1位(太い枠) */
+  /** 選ぶ期間の1位(太い枠)。同率1位のときは null */
   bestIndex: number | null;
   /** 選んでいるマス(下の「選んだ組み合わせ」に出る) */
   selected: number | null;
@@ -46,24 +57,109 @@ export function Heatmap({
     result.combos.forEach((c, i) => map.set(`${c.short_window}-${c.long_window}`, i));
     return map;
   }, [result.combos]);
-  const comboAt = (pos: Position) => indexOf.get(`${shorts[pos.row]}-${longs[pos.col]}`) ?? null;
-  const positionOf = (index: number | null): Position | null => {
-    if (index === null) return null;
+  // 最初に描くときだけ決める(そのあとは HeatGrid がキーボードの位置を持つ)
+  const [initial] = useState<Position>(() => {
+    const index = selected ?? bestIndex;
+    if (index === null) return { row: 0, col: longs.length - 1 };
     const c = result.combos[index];
     return { row: shorts.indexOf(c.short_window), col: longs.indexOf(c.long_window) };
-  };
-  // キーボードで動くマス(roving tabindex:表の中で Tab で止まるのは1マスだけ)
-  const [cursor, setCursor] = useState<Position>(() => positionOf(selected ?? bestIndex) ?? { row: 0, col: longs.length - 1 });
-  // 読み取り欄に出すマス(マウスで指しているマス。なければキーボードのマス)
-  const [hover, setHover] = useState<Position | null>(null);
+  });
+  // 読み取り欄に出すマス(マウスで指しているマスか、キーボードで動かしたマス)
+  const [shown, setShown] = useState<Position>(initial);
   const scaleMax = useMemo(() => heatScaleMax(result.combos, objective), [result.combos, objective]);
+  const clamped = segment === "out_of_sample" && exceedsScale(result.combos, objective, scaleMax);
+
+  const shownIndex = indexOf.get(`${shorts[shown.row]}-${longs[shown.col]}`) ?? null;
+  const shownCombo = shownIndex !== null ? result.combos[shownIndex] : null;
+
+  return (
+    <div>
+      {/* 読み取り欄:指している(フォーカスしている)マスの値。数字はいつでもここと下の表で読める */}
+      <div className="flex min-h-[3.25rem] flex-wrap items-baseline gap-x-5 gap-y-1 rounded-md bg-surface-2 px-3 py-2 text-[13px] tabular" aria-hidden="true">
+        {shownCombo ? (
+          <>
+            <span className="font-bold text-ink">
+              短期{shownCombo.short_window}日・長期{shownCombo.long_window}日
+            </span>
+            <span className="text-ink-2">
+              選ぶ期間 <b className="text-ink">{formatObjective(metricValue(shownCombo.in_sample, objective), objective)}</b>
+            </span>
+            {shownCombo.out_of_sample && (
+              <span className="text-ink-2">
+                検証期間 <b className="text-ink">{formatObjective(metricValue(shownCombo.out_of_sample, objective), objective)}</b>
+              </span>
+            )}
+            <span className="text-ink-3">取引 {shownCombo.in_sample.trade_count}回</span>
+            {shownIndex === bestIndex && <span className="text-ink-2">選ぶ期間の1位</span>}
+          </>
+        ) : (
+          <span className="text-ink-3">
+            短期{shorts[shown.row]}日・長期{longs[shown.col]}日:短期が長期以上なので計算しません
+          </span>
+        )}
+      </div>
+
+      <p className="mt-3 text-[12px] text-ink-3">縦:短期の日数 / 横:長期の日数</p>
+      <HeatGrid
+        result={result}
+        indexOf={indexOf}
+        objective={objective}
+        segment={segment}
+        scaleMax={scaleMax}
+        bestIndex={bestIndex}
+        selected={selected}
+        initial={initial}
+        onSelect={onSelect}
+        onShow={setShown}
+      />
+      <Legend objective={objective} scaleMax={scaleMax} clamped={clamped} />
+    </div>
+  );
+}
+
+/** マスの一覧(WAI-ARIA の grid)。キーボードで動く位置(roving tabindex)はここで持つ。 */
+const HeatGrid = memo(function HeatGrid({
+  result,
+  indexOf,
+  objective,
+  segment,
+  scaleMax,
+  bestIndex,
+  selected,
+  initial,
+  onSelect,
+  onShow,
+}: {
+  result: SweepResult;
+  indexOf: Map<string, number>;
+  objective: Objective;
+  segment: SegmentName;
+  scaleMax: number;
+  bestIndex: number | null;
+  selected: number | null;
+  initial: Position;
+  onSelect: (index: number) => void;
+  /** 読み取り欄に出すマスを伝える */
+  onShow: (pos: Position) => void;
+}) {
+  const shorts = result.grid.short_values;
+  const longs = result.grid.long_values;
+  // キーボードで動くマス(表の中で Tab で止まるのは1マスだけ)
+  const [cursor, setCursor] = useState<Position>(initial);
   const label = OBJECTIVE_LABELS[objective];
 
   const many = shorts.length > 25;
   const cellHeight = shorts.length <= 12 ? 30 : shorts.length <= 25 ? 22 : 14;
+  const sizing = cellSizing(longs.length);
+  const template = `${ROW_HEADER_PX}px repeat(${longs.length}, minmax(${sizing.minWidth}px, 1fr))`;
+  const minWidth = ROW_HEADER_PX + longs.length * (sizing.minWidth + sizing.gap);
   // 横の目盛りが多いときは、間引いて書く
   const labelEvery = Math.max(1, Math.ceil(longs.length / 12));
-  const template = `3.25rem repeat(${longs.length}, minmax(0, 1fr))`;
+
+  const comboAt = useCallback(
+    (pos: Position) => indexOf.get(`${shorts[pos.row]}-${longs[pos.col]}`) ?? null,
+    [indexOf, shorts, longs],
+  );
 
   function move(event: React.KeyboardEvent, pos: Position) {
     const last = { row: shorts.length - 1, col: longs.length - 1 };
@@ -99,55 +195,25 @@ export function Heatmap({
     }
     event.preventDefault();
     setCursor(next);
-    setHover(null);
-    // 次のマスにフォーカスを移す(描き直しのあとで)
+    onShow(next);
+    // 次のマスにすぐフォーカスを移す(マスはすべて描いてあるので、描き直しを待たない。続けて押した Enter が次のマスに届くように)。
+    // 横にスクロールしていても、フォーカスしたマスが見えるところまでブラウザがスクロールする
     const grid = (event.currentTarget as HTMLElement).closest("[role=grid]");
-    requestAnimationFrame(() => {
-      grid?.querySelector<HTMLElement>(`[data-pos="${next.row}-${next.col}"]`)?.focus();
-    });
+    grid?.querySelector<HTMLElement>(`[data-pos="${next.row}-${next.col}"]`)?.focus();
   }
 
-  const shown = hover ?? cursor;
-  const shownIndex = comboAt(shown);
-  const shownCombo = shownIndex !== null ? result.combos[shownIndex] : null;
-
   return (
-    <div>
-      {/* 読み取り欄:指している(フォーカスしている)マスの値。数字はいつでもここと下の表で読める */}
-      <div className="flex min-h-[3.25rem] flex-wrap items-baseline gap-x-5 gap-y-1 rounded-md bg-surface-2 px-3 py-2 text-[13px] tabular" aria-hidden="true">
-        {shownCombo ? (
-          <>
-            <span className="font-bold text-ink">
-              短期{shownCombo.short_window}日・長期{shownCombo.long_window}日
-            </span>
-            <span className="text-ink-2">
-              選ぶ期間 <b className="text-ink">{formatObjective(metricValue(shownCombo.in_sample, objective), objective)}</b>
-            </span>
-            {shownCombo.out_of_sample && (
-              <span className="text-ink-2">
-                検証期間 <b className="text-ink">{formatObjective(metricValue(shownCombo.out_of_sample, objective), objective)}</b>
-              </span>
-            )}
-            <span className="text-ink-3">取引 {shownCombo.in_sample.trade_count}回</span>
-            {shownIndex === bestIndex && <span className="text-ink-2">選ぶ期間の1位</span>}
-          </>
-        ) : (
-          <span className="text-ink-3">
-            短期{shorts[shown.row]}日・長期{longs[shown.col]}日:短期が長期以上なので計算しません
-          </span>
-        )}
-      </div>
-
-      <p className="mt-3 text-[12px] text-ink-3">縦:短期の日数 / 横:長期の日数</p>
+    <div className="mt-1 overflow-x-auto pb-1">
       <div
         role="grid"
         aria-label={`${label}(${SEGMENT_LABELS[segment]})のヒートマップ。縦が短期の日数、横が長期の日数。矢印キーで動き、Enter で選びます`}
         aria-rowcount={shorts.length + 1}
         aria-colcount={longs.length + 1}
-        className="mt-1 select-none"
-        onMouseLeave={() => setHover(null)}
+        className="select-none"
+        style={{ minWidth }}
+        onMouseLeave={() => onShow(cursor)}
       >
-        <div role="row" className="grid gap-[2px]" style={{ gridTemplateColumns: template }}>
+        <div role="row" className="grid" style={{ gridTemplateColumns: template, gap: sizing.gap }}>
           <div role="columnheader" className="text-right text-[11px] text-ink-3">
             <span className="sr-only">短期の日数 \ 長期の日数</span>
           </div>
@@ -159,7 +225,7 @@ export function Heatmap({
           ))}
         </div>
         {shorts.map((short, row) => (
-          <div key={short} role="row" className="mt-[2px] grid gap-[2px]" style={{ gridTemplateColumns: template }}>
+          <div key={short} role="row" className="grid" style={{ gridTemplateColumns: template, gap: sizing.gap, marginTop: sizing.gap }}>
             <div role="rowheader" className="flex items-center justify-end pr-2 text-[11px] text-ink-3 tabular">
               <span className={many && row % 2 === 1 ? "sr-only" : ""}>{short}</span>
               <span className="sr-only">日</span>
@@ -172,8 +238,11 @@ export function Heatmap({
                 "data-pos": `${row}-${col}`,
                 tabIndex: isCursor ? 0 : -1,
                 onKeyDown: (e: React.KeyboardEvent) => move(e, { row, col }),
-                onFocus: () => setCursor({ row, col }),
-                onMouseEnter: () => setHover({ row, col }),
+                onFocus: () => {
+                  setCursor({ row, col });
+                  onShow({ row, col });
+                },
+                onMouseEnter: () => onShow({ row, col }),
                 style: { height: cellHeight },
               } as const;
               if (index === null) {
@@ -214,13 +283,12 @@ export function Heatmap({
           </div>
         ))}
       </div>
-      <Legend objective={objective} scaleMax={scaleMax} />
     </div>
   );
-}
+});
 
 /** 色の物差し(凡例)。 */
-function Legend({ objective, scaleMax }: { objective: Objective; scaleMax: number }) {
+function Legend({ objective, scaleMax, clamped }: { objective: Objective; scaleMax: number; clamped: boolean }) {
   const diverging = objective !== "max_drawdown";
   const steps = diverging ? [-1, -0.5, 0, 0.5, 1] : [0, 0.25, 0.5, 0.75, 1];
   const gradient = steps.map((t) => heatColor(heatTone(t * scaleMax, objective, scaleMax))).join(", ");
@@ -228,26 +296,36 @@ function Legend({ objective, scaleMax }: { objective: Objective; scaleMax: numbe
     ? [formatObjective(-scaleMax, objective), "0", formatObjective(scaleMax, objective)]
     : [formatObjective(0, objective), formatObjective(scaleMax / 2, objective), formatObjective(scaleMax, objective)];
   return (
-    <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-2 text-[12px] text-ink-2">
-      <div className="min-w-[14rem] flex-1 sm:max-w-[22rem]">
-        <div aria-hidden="true" className="h-2.5 rounded-sm" style={{ background: `linear-gradient(to right, ${gradient})` }} />
-        <div className="mt-1 flex justify-between tabular">
-          {ends.map((text, i) => (
-            <span key={i}>{text}</span>
-          ))}
+    <div className="mt-4 space-y-2 text-[12px] text-ink-2">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+        <div className="min-w-[14rem] flex-1 sm:max-w-[22rem]">
+          <div aria-hidden="true" className="h-2.5 rounded-sm" style={{ background: `linear-gradient(to right, ${gradient})` }} />
+          <div className="mt-1 flex justify-between tabular">
+            {ends.map((text, i) => (
+              <span key={i}>{text}</span>
+            ))}
+          </div>
+          <p className="sr-only">
+            色の物差し:{diverging ? `${OBJECTIVE_LABELS[objective]}がプラスなら朱、マイナスなら藍。0 は灰色` : "最大ドローダウンが大きいほど濃い藍"}
+          </p>
         </div>
-        <p className="sr-only">
-          色の物差し:{diverging ? `${OBJECTIVE_LABELS[objective]}がプラスなら朱、マイナスなら藍。0 は灰色` : "最大ドローダウンが大きいほど濃い藍"}
-        </p>
+        <span className="inline-flex items-center gap-2">
+          <span aria-hidden="true" className="heat-legend-best inline-block h-4 w-6" />
+          太い枠:選ぶ期間の1位
+        </span>
+        <span className="inline-flex items-center gap-2">
+          <span aria-hidden="true" className="heat-legend-selected relative inline-block h-4 w-6" />
+          黒い点:選んだ組み合わせ
+        </span>
+        <span className="inline-flex items-center gap-2">
+          <span aria-hidden="true" className="inline-grid h-4 w-6 place-items-center bg-surface text-ink-3 ring-1 ring-rule">−</span>
+          算出不可
+        </span>
       </div>
-      <span className="inline-flex items-center gap-2">
-        <span aria-hidden="true" className="inline-block h-4 w-6" style={{ boxShadow: "inset 0 0 0 2px var(--ink)", background: "var(--heat-mid)" }} />
-        太い枠:選ぶ期間の1位
-      </span>
-      <span className="inline-flex items-center gap-2">
-        <span aria-hidden="true" className="inline-grid h-4 w-6 place-items-center bg-surface text-ink-3 ring-1 ring-rule">−</span>
-        算出不可
-      </span>
+      <p className="text-ink-3">
+        色の物差しは選ぶ期間の値で決めています(検証期間の値で決めると、検証期間の情報が選ぶ画面に入るため)。
+        {clamped && "検証期間には物差しを超える値があり、そのマスは端の色で塗っています(値は読み取り欄と表で読めます)。"}
+      </p>
     </div>
   );
 }

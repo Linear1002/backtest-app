@@ -166,7 +166,9 @@ export type NoteKind =
   | "stale_data"
   | "trials"
   | "selection_bias"
-  | "no_holdout";
+  | "no_holdout"
+  | "aligned_start"
+  | "sampling_error";
 
 export type BacktestResult = {
   symbol: SymbolSummary;
@@ -252,8 +254,13 @@ export type SegmentName = "in_sample" | "out_of_sample";
 
 export type SweepSegment = {
   name: SegmentName;
+  /** 計算した期間の開始日(選ぶ期間は、始まりをそろえたあとの日。docs/sweep.md 3章) */
   start_date: string;
   end_date: string;
+  /** 指定した開始日。選ぶ期間の始まりをそろえたときだけ start_date と違う */
+  requested_start_date: string;
+  /** そろえるためにウォームアップにだけ使った営業日の数 */
+  skipped_business_days: number;
   first_business_day: string;
   last_business_day: string;
   business_days: number;
@@ -270,6 +277,8 @@ export type SweepMetrics = {
   return_count: number;
   insufficient_cash_count: number;
   final_equity: number;
+  /** 株を持っていた営業日の数 */
+  holding_days: number;
 };
 
 export type SweepCombo = {
@@ -286,7 +295,11 @@ export type SweepRanking = {
   objective: Objective;
   order: number[];
   best_index: number | null;
+  /** 1位と同じ値の組み合わせの数。2以上なら1位は1つに決まらない(order の先頭からこの数) */
+  best_tie_count: number;
+  /** 1位の検証期間での順位(同率1位のときは null) */
   best_out_of_sample_rank: number | null;
+  in_sample_ranked: number;
   out_of_sample_ranked: number;
   rank_correlation: number | null;
   correlation_pairs: number;

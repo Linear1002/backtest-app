@@ -4,7 +4,7 @@ import { useId } from "react";
 
 import type { Strategy, SweepEngineInfo, SweepRequest, SymbolDetail } from "@/lib/api.ts";
 import { describeYen, formatDate, formatRatePct, formatYen } from "@/lib/format.ts";
-import { dayBefore, pairCount } from "@/lib/sweep.ts";
+import { dayBefore, longestWindow, pairCount } from "@/lib/sweep.ts";
 
 import { Seal } from "../Seal.tsx";
 import { SecondaryButton, StepHeading } from "../ui.tsx";
@@ -12,12 +12,18 @@ import { SecondaryButton, StepHeading } from "../ui.tsx";
 const count = new Intl.NumberFormat("ja-JP");
 
 // docs/sweep.md 3章・4章の要約(1組のバックテストの前提に加えて)
-const ASSUMPTIONS = [
-  "組み合わせごとに、選ぶ期間と検証期間を別々にバックテストします。1つ1つの計算は「1組で試す」とまったく同じです。",
-  "検証期間は、初期資金・持ち株なしから始めます(選ぶ期間の持ち株は引き継ぎません)。",
-  "順位は選ぶ期間の成績だけで付けます。検証期間は、選んだ組み合わせを確かめるためだけに使います。",
-  "当日の終値でシグナルを判定し、次に売買が成立した日の始値で約定します。配当・税金・ストップ高やストップ安は考えません。",
-];
+function assumptions(longest: number): string[] {
+  return [
+    "組み合わせごとに、選ぶ期間と検証期間を別々にバックテストします。1つ1つの計算は「1組で試す」とまったく同じです。",
+    `すべての組み合わせを同じ日から比べるため、開始日より前のデータが長期の日数(最長${longest}日)に足りないときは、選ぶ期間の始まりを、そのウォームアップがそろう日まで遅らせます。`,
+    "検証期間は、初期資金・持ち株なしから始めます(選ぶ期間の持ち株は引き継ぎません)。",
+    "順位は選ぶ期間の成績だけで付けます。検証期間は、選んだ組み合わせを確かめるためだけに使います。",
+    "当日の終値でシグナルを判定し、次に売買が成立した日の始値で約定します。配当・税金・ストップ高やストップ安は考えません。",
+  ];
+}
+
+/** 読み上げで知らせる区切り(途中経過の数字が変わるたびには読み上げない)。 */
+const MILESTONES = ["計算を始めました", "4分の1まで終わりました", "半分まで終わりました", "4分の3まで終わりました"];
 
 export function SweepConfirmStep({
   detail,
@@ -28,6 +34,7 @@ export function SweepConfirmStep({
   running,
   progress,
   cancelled,
+  cancelError = null,
   error,
   outdated,
   onRun,
@@ -44,6 +51,8 @@ export function SweepConfirmStep({
   progress: { done: number; total: number } | null;
   /** 中止したところ */
   cancelled: boolean;
+  /** 「中止する」が API に届かなかったときの文 */
+  cancelError?: string | null;
   error: string | null;
   outdated: boolean;
   onRun: () => void;
@@ -71,6 +80,7 @@ export function SweepConfirmStep({
     ["売買単位", `${detail.market.lot_size}株`],
   ];
   const ratio = progress && progress.total > 0 ? progress.done / progress.total : 0;
+  const milestone = MILESTONES[Math.min(MILESTONES.length - 1, Math.floor(ratio * 4))];
 
   return (
     <section aria-labelledby={headingId}>
@@ -96,7 +106,7 @@ export function SweepConfirmStep({
         <div>
           <h3 className="text-[15px] font-bold text-ink">計算の前提</h3>
           <ul className="mt-2 space-y-2 text-[13px] leading-6 text-ink-2">
-            {ASSUMPTIONS.map((text) => (
+            {assumptions(longestWindow(g)).map((text) => (
               <li key={text} className="flex gap-2">
                 <span aria-hidden="true" className="text-ink-3">
                   ※
@@ -143,7 +153,8 @@ export function SweepConfirmStep({
       )}
 
       {cancelled && !running && (
-        <p className="mt-6 text-[14px] text-ink-2" role="status">
+        // 押した「中止する」ボタンは消えるので、フォーカスをこの知らせに移す(lib/flow.ts の sweepCancelled)
+        <p className="mt-6 text-[14px] text-ink-2 outline-none" role="status" tabIndex={-1} data-focus-notice>
           総当たりを中止しました。条件を変えるか、もう一度実行してください。
         </p>
       )}
@@ -156,8 +167,12 @@ export function SweepConfirmStep({
 
       {running && (
         <div className="mt-8 rounded-md border border-rule bg-surface px-4 py-3">
+          {/* 読み上げは区切り(始め・4分の1・半分・4分の3)だけ。数字は見た目の文とバーで伝える */}
+          <p className="sr-only" aria-live="polite">
+            総当たりの{milestone}
+          </p>
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-[14px] text-ink" aria-live="polite">
+            <p className="text-[14px] text-ink" aria-hidden="true">
               {progress && progress.total > 0
                 ? `計算しています(${count.format(progress.done)} / ${count.format(progress.total)}通り)`
                 : "計算を始めています…"}
@@ -166,6 +181,11 @@ export function SweepConfirmStep({
               中止する
             </SecondaryButton>
           </div>
+          {cancelError && (
+            <p role="alert" className="mt-2 text-[13px] text-shu">
+              {cancelError}
+            </p>
+          )}
           <div
             role="progressbar"
             aria-label="総当たりの進み具合"

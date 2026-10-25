@@ -9,6 +9,8 @@
 // - 結果の画面(手順5)に行けるのは、いまの条件がその結果を出した条件と同じときだけ。条件を変えたら、もう一度実行する
 // - 実行中は、手順の移動も条件の変更も受け付けない(送ったリクエストと記録する条件がずれないように)
 // - 条件の画面で「1組で試す」と「総当たりで比べる」(docs/sweep.md)を切り替える。結果はそれぞれ別に覚えておく
+// - 総当たりの結果から1つの組み合わせを「詳しく見る」と、その期間(選ぶ期間か検証期間)の1組の条件になる。
+//   「総当たりの結果に戻る」で、総当たりを実行したときの条件と、結果の画面の見方(並べる基準など)に戻す
 
 import {
   ApiError,
@@ -17,11 +19,14 @@ import {
   type BacktestResult,
   type CostKey,
   type Meta,
+  type Objective,
   type ParamSpec,
+  type SegmentName,
   type Strategy,
   type SweepEngineInfo,
   type SweepRequest,
   type SweepResult,
+  type SweepSegment,
   type SymbolDetail,
   type SymbolSummary,
 } from "./api.ts";
@@ -34,7 +39,7 @@ import {
   type FormState,
   type RunMode,
 } from "./form.ts";
-import { GRID_KEYS, holdoutStart, parseSweepGrid, validateHoldout } from "./sweep.ts";
+import { GRID_KEYS, holdoutStart, parseSweepGrid, rankingFor, uniqueBest, validateHoldout } from "./sweep.ts";
 
 export type StepId = 1 | 2 | 3 | 4 | 5;
 
@@ -52,15 +57,39 @@ export type SweepRecord = {
   result: SweepResult;
   /** 計算にかかった時間(ミリ秒) */
   elapsedMs: number | null;
+  /** 実行したときの入力欄(「総当たりの結果に戻る」で、この条件に戻す) */
+  form: FormState;
+};
+
+/** 総当たりの結果の画面の見方。1組の結果を見てから戻ってきたときも、そのまま残す。 */
+export type SweepViewState = {
+  /** 並べる基準(色を付ける値) */
+  objective: Objective;
+  /** 色を付ける期間 */
+  segment: SegmentName;
+  /** 選んでいる組み合わせ(combos の中の位置) */
+  selected: number | null;
 };
 
 /** 実行中のもの。総当たりは、API のジョブの id と途中経過(終わった組み合わせの数)も持つ */
 export type Running =
   | { id: number; kind: "single"; request: BacktestRequest }
-  | { id: number; kind: "sweep"; request: SweepRequest; jobId: string | null; done: number; total: number };
+  | {
+      id: number;
+      kind: "sweep";
+      request: SweepRequest;
+      /** 実行を始めたときの入力欄 */
+      form: FormState;
+      jobId: string | null;
+      done: number;
+      total: number;
+    };
 
-/** フォーカスを移す先。手順が変わったら見出し、入力に誤りがあれば最初の誤りの欄。 */
-export type FocusRequest = { target: "heading" | "error"; seq: number };
+/**
+ * フォーカスを移す先。手順が変わったら見出し、入力に誤りがあれば最初の誤りの欄、
+ * 知らせ(総当たりを中止した、など)があればその文。
+ */
+export type FocusRequest = { target: "heading" | "error" | "notice"; seq: number };
 
 export type FlowState = {
   step: StepId;
@@ -89,6 +118,7 @@ export type FlowState = {
   sweepCancelled: boolean;
   last: RunRecord | null;
   lastSweep: SweepRecord | null;
+  sweepView: SweepViewState;
   /** 結果が出たときの動きを再生し終えた結果の番号(戻ってきたときに、もう一度再生しないため) */
   animated: number | null;
 
@@ -120,9 +150,11 @@ export type FlowAction =
   | { type: "sweepSucceeded"; id: number; result: SweepResult; elapsedMs: number | null }
   | { type: "sweepFailed"; id: number; message: string | null; fieldErrors: FieldErrors }
   | { type: "sweepCancelled"; id: number }
-  /** 総当たりの結果から、1つの組み合わせを通常のバックテストで詳しく見る */
-  | { type: "inspectCombo"; short: number; long: number }
-  /** 1組の結果から、総当たりの結果に戻る */
+  /** 総当たりの結果の画面の見方を変える(並べる基準・色を付ける期間・選んだ組み合わせ) */
+  | { type: "sweepView"; view: Partial<SweepViewState> }
+  /** 総当たりの結果から、1つの組み合わせを、その期間の通常のバックテストで詳しく見る */
+  | { type: "inspectCombo"; short: number; long: number; segment: SegmentName }
+  /** 1組の画面から、総当たりの結果に戻る(総当たりを実行したときの条件に戻す) */
   | { type: "showSweep" }
   | { type: "resultAnimated"; id: number };
 
@@ -145,6 +177,7 @@ export const initialFlow: FlowState = {
   sweepCancelled: false,
   last: null,
   lastSweep: null,
+  sweepView: { objective: "sharpe_ratio", segment: "in_sample", selected: null },
   animated: null,
   focus: { target: "heading", seq: 0 },
 };
@@ -323,11 +356,29 @@ export function resultIsOutdated(state: FlowState): boolean {
   return previous !== null && !hasCurrentResult(state);
 }
 
-/** 1組の結果を見ているときに、同じ条件の総当たりの結果へ戻れるか。 */
+/** 1組の画面(確認・結果)から、総当たりの結果へ戻れるか。戻ると、総当たりを実行したときの条件になる。 */
 export function canShowSweep(state: FlowState): boolean {
-  if (state.running || !state.form || !state.lastSweep) return false;
-  const asSweep = { ...state, form: { ...state.form, mode: "sweep" as const } };
-  return sameSweepRequest(state.lastSweep.request, currentSweepRequest(asSweep));
+  return state.running === null && state.lastSweep !== null && state.detail?.symbol.id === state.lastSweep.request.symbol_id;
+}
+
+/**
+ * 1組のバックテストの条件が、総当たりの結果の1つの組み合わせ・1つの期間とまったく同じなら、その期間と試した数。
+ * 「詳しく見る」から開いた結果に、総当たりの中から選んだものだと書くため(数字は総当たりのその行と一致する)。
+ */
+export function sweepOrigin(
+  lastSweep: SweepRecord | null,
+  request: BacktestRequest,
+): { segment: SweepSegment; trials: number } | null {
+  if (!lastSweep) return null;
+  const sweep = lastSweep.request;
+  const result = lastSweep.result;
+  const sameCosts = COST_KEYS.every((key) => request.params[key] === sweep.params[key]);
+  if (request.symbol_id !== sweep.symbol_id || request.strategy_id !== sweep.strategy_id || !sameCosts) return null;
+  const inGrid = result.combos.some(
+    (c) => c.short_window === request.params.short_window && c.long_window === request.params.long_window,
+  );
+  const segment = result.segments.find((s) => s.start_date === request.start_date && s.end_date === request.end_date);
+  return inGrid && segment ? { segment, trials: result.count } : null;
 }
 
 // --- 実行のエラーの振り分け ---------------------------------------------------------
@@ -411,8 +462,10 @@ const DEPENDS_ON: Partial<Record<FieldKey, readonly string[]>> = {
   end_date: ["start_date"],
   short_min: ["short_max"],
   long_min: ["long_max"],
-  grid: GRID_KEYS,
-  holdout_start_date: ["start_date", "end_date"],
+  // 「組み合わせがない・多すぎる」と、API の「ウォームアップを除くと期間が短すぎる」(docs/sweep.md 5章の5)
+  grid: [...GRID_KEYS, "start_date", "end_date"],
+  // 検証期間の開始日の誤りは、期間と、いちばん長い長期日数(選ぶ期間の始まりをそろえる日数)にも左右される
+  holdout_start_date: ["start_date", "end_date", ...GRID_KEYS],
 };
 
 /** 誤りを左右する入力の値(変わったかどうかを比べるためだけに使う)。 */
@@ -630,10 +683,10 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
     }
 
     case "sweepStarted": {
-      if (state.running || !sameSweepRequest(action.request, currentSweepRequest(state))) return state;
+      if (state.running || !state.form || !sameSweepRequest(action.request, currentSweepRequest(state))) return state;
       return {
         ...state,
-        running: { id: action.id, kind: "sweep", request: action.request, jobId: null, done: 0, total: 0 },
+        running: { id: action.id, kind: "sweep", request: action.request, form: state.form, jobId: null, done: 0, total: 0 },
         runError: null,
         sweepCancelled: false,
       };
@@ -651,8 +704,15 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
         request: state.running.request,
         result: action.result,
         elapsedMs: action.elapsedMs,
+        form: state.running.form,
       };
-      return moveTo({ ...state, running: null, lastSweep }, 5);
+      // 新しい結果は、シャープレシオで並べ、選ぶ期間に色を付け、1位(同率なら選ばない)を選んだところから見せる
+      const sweepView: SweepViewState = {
+        objective: "sharpe_ratio",
+        segment: "in_sample",
+        selected: uniqueBest(rankingFor(action.result.rankings, "sharpe_ratio")),
+      };
+      return moveTo({ ...state, running: null, lastSweep, sweepView }, 5);
     }
 
     case "sweepFailed": {
@@ -662,15 +722,23 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
 
     case "sweepCancelled": {
       if (state.running?.kind !== "sweep" || state.running.id !== action.id) return state;
-      return { ...state, running: null, sweepCancelled: true };
+      // 押した「中止する」ボタンは消えるので、中止したという知らせにフォーカスを移す
+      return { ...state, running: null, sweepCancelled: true, focus: focus(state, "notice") };
     }
 
+    case "sweepView":
+      return { ...state, sweepView: { ...state.sweepView, ...action.view } };
+
     case "inspectCombo": {
-      if (!state.form) return state;
-      // 1組のバックテストにして、その組み合わせの日数を入れる(期間・費用・資金はそのまま)。確認の画面へ
+      if (!state.form || !state.lastSweep) return state;
+      const segment = state.lastSweep.result.segments.find((s) => s.name === action.segment);
+      if (!segment) return state;
+      // その期間だけの1組のバックテストにする(総当たりのその行と同じ計算になる。費用・資金はそのまま)。確認の画面へ
       const form: FormState = {
         ...state.form,
         mode: "single",
+        start_date: segment.start_date,
+        end_date: segment.end_date,
         params: { ...state.form.params, short_window: String(action.short), long_window: String(action.long) },
       };
       const next = { ...state, form, fieldErrors: {}, runError: null };
@@ -678,8 +746,9 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
     }
 
     case "showSweep": {
-      if (!canShowSweep(state) || !state.form) return state;
-      return moveTo({ ...state, form: { ...state.form, mode: "sweep" }, fieldErrors: {}, runError: null }, 5);
+      if (!canShowSweep(state) || !state.lastSweep) return state;
+      // 総当たりを実行したときの条件に戻す(結果の画面の見方 sweepView はそのまま)
+      return moveTo({ ...state, form: state.lastSweep.form, fieldErrors: {}, runError: null, sweepCancelled: false }, 5);
     }
 
     case "resultAnimated":

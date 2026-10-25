@@ -6,7 +6,7 @@ import type { ParamKey, ParamSpec, SweepGridKey, SymbolDetail } from "@/lib/api.
 import { describeYen, formatDate } from "@/lib/format.ts";
 import { presetPeriod, toNumber, type FieldErrors, type FormState, type RunMode } from "@/lib/form.ts";
 import { holdoutOf } from "@/lib/flow.ts";
-import { dayBefore, holdoutStart, parseSweepGrid, validateHoldout, type HoldoutChoice } from "@/lib/sweep.ts";
+import { dayBefore, holdoutStart, longestWindow, parseSweepGrid, validateHoldout, type HoldoutChoice } from "@/lib/sweep.ts";
 
 import { FieldError, PrimaryButton, StepHeading } from "../ui.tsx";
 
@@ -279,6 +279,9 @@ function SweepGridFields({
       <p className="text-[13px] leading-6 text-ink-3">
         組み合わせごとに、選ぶ期間と検証期間を別々にバックテストします。
         {maxPairs !== null && `このエンジンでは${count.format(maxPairs)}通りまで計算できます。`}
+        開始日より前のデータが長期の日数に足りないときは、すべての組み合わせを同じ日から比べるため、選ぶ期間の始まりを
+        {parsed.grid ? `長期${longestWindow(parsed.grid)}日` : "いちばん長い長期日数"}
+        のウォームアップがそろう日まで遅らせます。
       </p>
     </div>
   );
@@ -316,6 +319,8 @@ function HoldoutFields({
       <div
         role="group"
         aria-label="検証期間の決め方"
+        // 誤りがあるときは、確認へ進もうとしたときにここへフォーカスを移し、誤りの文を読み上げる
+        aria-describedby={error ? `${dateId}-error` : undefined}
         data-invalid-anchor={error && choice !== "custom" ? "true" : undefined}
         tabIndex={error && choice !== "custom" ? -1 : undefined}
         className="flex flex-wrap gap-2 outline-none"

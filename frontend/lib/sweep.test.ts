@@ -1,21 +1,27 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { SweepCombo, SweepGrid, SweepMetrics } from "./api.ts";
+import type { SweepCombo, SweepGrid, SweepMetrics, SweepRanking } from "./api.ts";
 import {
   competitionRank,
   correlationReading,
   dayBefore,
   DEFAULT_SWEEP_FORM,
+  exceedsScale,
   gridPairs,
   gridValues,
   heatColor,
   heatScaleMax,
   heatTone,
   holdoutStart,
+  isCalendarDate,
+  longestWindow,
+  MIN_CORRELATION_PAIRS,
   pairCount,
   parseSweepGrid,
   segmentValues,
+  sharpeStandardError,
+  uniqueBest,
   validateHoldout,
   type SweepErrors,
   type SweepForm,
@@ -65,6 +71,23 @@ test("組み合わせは短期 < 長期 だけ、短期の小さい順 → 長�
   assert.equal(parseSweepGrid(big, null).pairs, 14_950);
 });
 
+test("組み合わせの数は、一覧を作って数えた数と同じ(式で数える)", () => {
+  for (const [smin, smax, sstep, lmin, lmax, lstep] of [
+    [1, 30, 1, 2, 60, 1],
+    [3, 30, 3, 20, 120, 10],
+    [5, 50, 7, 1, 40, 3],
+    [10, 20, 5, 5, 10, 5],
+    [1, 1000, 1, 1, 1000, 1],
+    [7, 7, 1, 7, 7, 1],
+    [2, 9, 4, 3, 11, 2],
+  ]) {
+    const grid = { short_min: smin, short_max: smax, short_step: sstep, long_min: lmin, long_max: lmax, long_step: lstep };
+    assert.equal(pairCount(grid), gridPairs(grid).length, JSON.stringify(grid));
+  }
+  // いちばん長い長期日数(選ぶ期間の始まりをそろえる日数):刻みに乗る最大
+  assert.equal(longestWindow({ short_min: 3, short_max: 30, short_step: 3, long_min: 20, long_max: 125, long_step: 10 }), 120);
+});
+
 test("検証期間の開始日の決め方", () => {
   const period = { start_date: "2022-01-04", end_date: "2026-07-31" };
   assert.equal(holdoutStart(period, "none", ""), null);
@@ -91,6 +114,22 @@ test("検証期間の開始日のチェック(営業日の数は API だけが�
   assert.equal(validateHoldout(period, ""), "日付は YYYY-MM-DD の形で入力してください");
 });
 
+type HoldoutCase = { holdout: string; message: string | null; only: "api" | "frontend" | null };
+
+// 検証期間の開始日 → メッセージ の表。API のテスト(tests/python/test_api_sweeps.py)も同じ表を読む
+const HOLDOUTS = fixture<{ period: { start_date: string; end_date: string }; cases: HoldoutCase[] }>("holdout_messages.json");
+
+test("検証期間の開始日のメッセージ:API と同じ表で確かめる(営業日の数は API だけ)", () => {
+  assert.ok(HOLDOUTS.cases.length >= 10);
+  for (const c of HOLDOUTS.cases) {
+    if (c.only === "api") continue;
+    assert.equal(validateHoldout(HOLDOUTS.period, c.holdout), c.message, c.holdout || "(空欄)");
+  }
+  assert.ok(isCalendarDate("2024-02-29"));
+  assert.ok(!isCalendarDate("2025-02-29"));
+  assert.ok(!isCalendarDate("2025-2-1"));
+});
+
 function metrics(sharpe: number | null, total = 0, drawdown = 0.1): SweepMetrics {
   return {
     total_return: total,
@@ -103,6 +142,7 @@ function metrics(sharpe: number | null, total = 0, drawdown = 0.1): SweepMetrics
     return_count: 10,
     insufficient_cash_count: 0,
     final_equity: 1,
+    holding_days: 5,
   };
 }
 
@@ -110,10 +150,12 @@ function combo(is: SweepMetrics, oos: SweepMetrics | null): SweepCombo {
   return { short_window: 1, long_window: 2, in_sample: is, out_of_sample: oos };
 }
 
-test("ヒートマップの色:0 を中心に、プラスは朱・マイナスは藍。同じ物差しを選ぶ期間と検証期間で使う", () => {
-  const combos = [combo(metrics(0.5), metrics(-2)), combo(metrics(1), metrics(null))];
-  // 物差しは両方の期間の絶対値の最大(2)
-  assert.equal(heatScaleMax(combos, "sharpe_ratio"), 2);
+test("ヒートマップの色:0 を中心に、プラスは朱・マイナスは藍。物差しは選ぶ期間の値だけで決める", () => {
+  const combos = [combo(metrics(0.5), metrics(-2)), combo(metrics(-1), metrics(null))];
+  // 物差しは選ぶ期間の絶対値の最大(1)。検証期間の -2 は物差しに入れない(検証期間の情報を選ぶ画面に入れないため)
+  assert.equal(heatScaleMax(combos, "sharpe_ratio"), 1);
+  assert.ok(exceedsScale(combos, "sharpe_ratio", 1)); // 検証期間の -2 は端の色にそろえる
+  assert.ok(!exceedsScale(combos, "sharpe_ratio", 2));
   assert.deepEqual(heatTone(1, "sharpe_ratio", 2), { kind: "up", strength: 0.5 });
   assert.deepEqual(heatTone(-2, "sharpe_ratio", 2), { kind: "down", strength: 1 });
   assert.deepEqual(heatTone(-5, "sharpe_ratio", 2), { kind: "down", strength: 1 }); // はみ出しは最大にそろえる
@@ -131,12 +173,35 @@ test("ヒートマップの色:0 を中心に、プラスは朱・マイナス�
   assert.equal(heatColor({ kind: "down", strength: 0.01 }), "color-mix(in oklab, var(--ai) 13%, var(--heat-mid))");
 });
 
-test("順位相関の読み方(目安)", () => {
-  assert.match(correlationReading(0.8), /ある程度そろっています/);
-  assert.match(correlationReading(0.3), /弱い関係/);
-  assert.match(correlationReading(0.05), /ほとんど関係がありません/);
-  assert.match(correlationReading(-0.4), /逆の関係/);
-  assert.match(correlationReading(null), /足りない/);
+test("順位相関の読み方(目安):組み合わせが少ないときは目安を出さない", () => {
+  const n = MIN_CORRELATION_PAIRS;
+  assert.match(correlationReading(0.8, n), /^目安:ある程度そろっています/);
+  assert.match(correlationReading(0.3, n), /弱い関係/);
+  assert.match(correlationReading(0.05, 105), /ほとんど関係がありません/);
+  assert.match(correlationReading(-0.4, 105), /逆の関係/);
+  assert.match(correlationReading(0.9, n - 1), /少ないため、読み方の目安は出しません/);
+  assert.match(correlationReading(null, 2), /3つ未満/);
+  assert.match(correlationReading(null, 50), /すべての組み合わせが同じ値/);
+});
+
+test("シャープレシオの偶然の幅の目安(API の注記と同じ式)と、同率1位", () => {
+  assert.equal(sharpeStandardError(246, 245), 1); // 1年分(日次リターン245個)なら ±1
+  assert.ok(Math.abs(sharpeStandardError(148, 245) - Math.sqrt(245 / 147)) < 1e-12);
+  const ranking: SweepRanking = {
+    objective: "sharpe_ratio",
+    order: [2, 0, 1],
+    best_index: 2,
+    best_tie_count: 1,
+    best_out_of_sample_rank: null,
+    in_sample_ranked: 3,
+    out_of_sample_ranked: 3,
+    rank_correlation: null,
+    correlation_pairs: 3,
+    neighbors_mean: null,
+    neighbors_count: 0,
+  };
+  assert.equal(uniqueBest(ranking), 2);
+  assert.equal(uniqueBest({ ...ranking, best_tie_count: 2 }), null); // 同率1位は1つに決めない
 });
 
 test("期間ごとの値と順位(同じ値は同じ順位。値がなければ順位なし)", () => {
