@@ -17,6 +17,7 @@
 
 - **5つの手順**:銘柄を選ぶ → 売買ルール → 条件(期間・移動平均の日数・手数料・スリッページ・初期資金)→ 確認 → 結果
 - **結果**:最終資産・損益、成績表(総リターン・年率・最大ドローダウン・シャープレシオ・勝率)、株価と移動平均・資産額・ドローダウンのチャート、取引の記録、分割・併合の処理、結果を読むときの注意
+- **買い持ちとの比較**:同じ銘柄を同じ期間・同じ費用でただ持ち続けた場合(買い持ち)を、計算書・成績表・チャートに並べる(`docs/benchmark.md`)
 - **パラメータの総当たり**:移動平均の日数の組み合わせ(既定 105通り、最大 2,000通り)をまとめて試し、ヒートマップと順位で比べる。
   期間の最後を「検証期間」として取っておき、選ぶのに使っていない期間の成績も並べる(過剰最適化への備え。`docs/sweep.md`)。
   気になるマスを選ぶと、その組み合わせの売買の記録まで見られる
@@ -39,7 +40,10 @@
    順位は「選ぶ期間」だけで付け、試した数・その1位の検証期間での順位・2つの期間の順位相関を結果のいちばん上に出す
    (架空データ DEMO:1003 の既定の条件では、選ぶ期間の1位が検証期間では 105通り中 74位、順位相関は −0.17 だった)。
    長期の日数が違う組み合わせも同じ日から評価し、色の物差しにも検証期間の値を混ぜない
-7. **独立した検証役**:実装とは別に、仕様との食い違いを探す役(検証部)とコードレビュー役を置き、見つかった問題を直した(例:調整済み株価で株数を決めると、将来の分割の情報で「買えなかったはずの取引」が成立してしまう問題)
+7. **比べる相手を置く**:株価が上がった期間なら、下手な売買ルールでも利益は出る。だから、同じ期間・同じ費用の**買い持ち**と必ず並べる。
+   買い持ちも、株数の決め方・分割の比率・評価価格・指標は売買ルールと同じ関数で計算し、「1回だけ買って持ち続けた移動平均クロス」と資産額が完全に一致することをテストで確かめている
+   (DEMO:1003 の既定の条件では、移動平均クロスの +79.1% に対して買い持ちは +178.0%。総当たりでも、検証期間で買い持ちを上回ったのは 105通り中 35通り)
+8. **独立した検証役**:実装とは別に、仕様との食い違いを探す役(検証部)とコードレビュー役を置き、見つかった問題を直した(例:調整済み株価で株数を決めると、将来の分割の情報で「買えなかったはずの取引」が成立してしまう問題)
 
 ## しくみ
 
@@ -90,6 +94,7 @@ make e2e          # 画面〜API の通しのテスト(Playwright)
 | 仕様書(`docs/mvp.md`) | できた |
 | 株価データ・Python リファレンス・API・画面 | できた |
 | パラメータの総当たり(仕様 `docs/sweep.md`・Python 版・正解データ24ケース・API・画面) | できた(計算は Python を複数のプロセスで) |
+| 買い持ちとの比較(仕様 `docs/benchmark.md`・Python 版・API・画面) | できた |
 | C++ 版エンジン | **作者が自分で書いている**(手順:`docs/cpp/README.md`。正解データとの答え合わせは CI で自動) |
 | C++ 版・GPU 版の総当たり | 計画(`docs/gpu-plan.md`。正解データと、API に差し込む場所は用意してある) |
 
@@ -99,6 +104,7 @@ make e2e          # 画面〜API の通しのテスト(Playwright)
 |---|---|
 | `docs/mvp.md` | MVP の仕様(計算の決まりの正) |
 | `docs/sweep.md` | パラメータの総当たりの仕様(格子・選ぶ期間と検証期間・並べ方・API) |
+| `docs/benchmark.md` | 比較の基準(買い持ち)の仕様 |
 | `docs/tour.md` | コードの読み方ガイド(1回のバックテストがどのファイルを通るか) |
 | `docs/data.md` | 株価データの取得・保存と、利用規約 |
 | `docs/cpp/README.md`・`docs/cpp/contract.md` | C++ 版を書く道のり(マイルストーン M0〜M8)と入出力の約束 |
@@ -126,5 +132,6 @@ A Japanese-language web app for backtesting trading rules on Japanese equities, 
 - **Spec-first**: `docs/mvp.md` specifies every rule down to summation order, rounding and error precedence.
 - **Three-tier correctness**: a slow, readable Python reference engine is the oracle; the C++ engine (being written by the author) must match it on 60 golden cases (exact for dates, share counts and win/loss; 1e-9 relative tolerance for amounts — or bit-for-bit in strict mode), and a future CUDA parameter sweep must match the C++ engine.
 - **Parameter sweep with an honest holdout**: grid search over moving-average windows (up to 2,000 pairs in Python, run as a cancellable background job across processes), ranked on an in-sample period only and re-tested on a held-out period. The UI leads with the number of trials, the in-sample winner's out-of-sample rank and the Spearman rank correlation between the two periods, so a lucky winner is visible as such (`docs/sweep.md`, 24 golden sweep cases).
+- **A benchmark you can't skip**: every result is shown next to buy-and-hold over the same period with the same costs, computed with the same sizing, split-ratio, valuation and metric functions as the strategy (and verified to match the strategy exactly whenever the strategy happens to buy once and hold) (`docs/benchmark.md`).
 - **Stack**: Next.js/TypeScript (hand-drawn SVG charts and an ARIA-grid heatmap), FastAPI, J-Quants API with rate limiting and Parquet caching, pytest/GoogleTest/node:test/Playwright with automated WCAG checks, GitHub Actions CI.
 - **AI collaboration, stated honestly**: the UI, API, data layer and reference engine were written with Claude Code under the author's review; the C++/CUDA engines are the author's own work.
