@@ -11,6 +11,8 @@
 // - 条件の画面で「1組で試す」と「総当たりで比べる」(docs/sweep.md)を切り替える。結果はそれぞれ別に覚えておく
 // - 総当たりの結果から1つの組み合わせを「詳しく見る」と、その期間(選ぶ期間か検証期間)の1組の条件になる。
 //   「総当たりの結果に戻る」で、総当たりを実行したときの条件と、結果の画面の見方(並べる基準など)に戻す
+// - 「詳しく見る」で開いた1組の条件には、出どころ(どの総当たりの、どの期間か)を記録しておき、その条件で実行した結果に引き継ぐ。
+//   自分で同じ条件を入れただけの結果には付けない
 
 import {
   ApiError,
@@ -48,7 +50,27 @@ export type RunRecord = {
   id: number;
   request: BacktestRequest;
   result: BacktestResult;
+  /** 総当たりの「詳しく見る」から実行したときの出どころ(それ以外は null) */
+  origin: SweepOrigin | null;
 };
+
+/** 総当たりの結果から「詳しく見る」で選んだ1組の出どころ(docs/sweep.md 8章)。 */
+export type SweepOrigin = {
+  /** 総当たりの番号(SweepRecord.id) */
+  sweepId: number;
+  /** その組み合わせを計算した期間(選ぶ期間か検証期間) */
+  segment: SweepSegment;
+  /** 総当たりで試した組み合わせの数 */
+  trials: number;
+  /** 総当たりに検証期間があったか(なければ「選ぶ期間」ではなく「期間」と書く) */
+  hasHoldout: boolean;
+  /** 総当たりを計算したエンジンと、データの取得日時(1組の結果と「同じ計算」と言えるかを決める) */
+  engine: string;
+  fetchedAt: string | null;
+};
+
+/** 「詳しく見る」で作った1組の条件と、その出どころ。 */
+export type InspectRecord = { request: BacktestRequest; origin: SweepOrigin };
 
 /** 総当たりの結果と、そのときの条件。 */
 export type SweepRecord = {
@@ -73,7 +95,7 @@ export type SweepViewState = {
 
 /** 実行中のもの。総当たりは、API のジョブの id と途中経過(終わった組み合わせの数)も持つ */
 export type Running =
-  | { id: number; kind: "single"; request: BacktestRequest }
+  | { id: number; kind: "single"; request: BacktestRequest; origin: SweepOrigin | null }
   | {
       id: number;
       kind: "sweep";
@@ -119,6 +141,8 @@ export type FlowState = {
   last: RunRecord | null;
   lastSweep: SweepRecord | null;
   sweepView: SweepViewState;
+  /** 総当たりの「詳しく見る」で作った1組の条件(その条件のまま実行したら、結果に出どころを書く) */
+  inspected: InspectRecord | null;
   /** 結果が出たときの動きを再生し終えた結果の番号(戻ってきたときに、もう一度再生しないため) */
   animated: number | null;
 
@@ -178,6 +202,7 @@ export const initialFlow: FlowState = {
   last: null,
   lastSweep: null,
   sweepView: { objective: "sharpe_ratio", segment: "in_sample", selected: null },
+  inspected: null,
   animated: null,
   focus: { target: "heading", seq: 0 },
 };
@@ -361,24 +386,36 @@ export function canShowSweep(state: FlowState): boolean {
   return state.running === null && state.lastSweep !== null && state.detail?.symbol.id === state.lastSweep.request.symbol_id;
 }
 
+/** エンジン以外が同じか(エンジンは確認の画面で選び直せるので、出どころの判定には使わない)。 */
+function sameExceptEngine(a: BacktestRequest | null, b: BacktestRequest | null): boolean {
+  return a !== null && b !== null && sameRequest({ ...a, engine: "" }, { ...b, engine: "" });
+}
+
 /**
- * 1組のバックテストの条件が、総当たりの結果の1つの組み合わせ・1つの期間とまったく同じなら、その期間と試した数。
- * 「詳しく見る」から開いた結果に、総当たりの中から選んだものだと書くため(数字は総当たりのその行と一致する)。
+ * いまの1組の条件が、総当たりの「詳しく見る」で作った条件なら、その出どころ(確認の画面に書く)。
+ * 条件を1つでも変えたら null(変えた条件は、総当たりの中から選んだものではない)。
  */
-export function sweepOrigin(
-  lastSweep: SweepRecord | null,
-  request: BacktestRequest,
-): { segment: SweepSegment; trials: number } | null {
-  if (!lastSweep) return null;
-  const sweep = lastSweep.request;
-  const result = lastSweep.result;
-  const sameCosts = COST_KEYS.every((key) => request.params[key] === sweep.params[key]);
-  if (request.symbol_id !== sweep.symbol_id || request.strategy_id !== sweep.strategy_id || !sameCosts) return null;
-  const inGrid = result.combos.some(
-    (c) => c.short_window === request.params.short_window && c.long_window === request.params.long_window,
-  );
-  const segment = result.segments.find((s) => s.start_date === request.start_date && s.end_date === request.end_date);
-  return inGrid && segment ? { segment, trials: result.count } : null;
+export function inspectedOrigin(state: FlowState): SweepOrigin | null {
+  if (!state.inspected || runMode(state) !== "single") return null;
+  return sameExceptEngine(state.inspected.request, currentRequest(state)) ? state.inspected.origin : null;
+}
+
+/**
+ * 「詳しく見る」の1組を、総当たりと「同じ計算」と言えるか。同じエンジンで、同じデータ(取得日時)のときだけ。
+ * fetchedAt は1組の結果のデータの取得日時(実行する前は undefined で、エンジンだけで決める)。
+ */
+export function sameCalculationAsSweep(origin: SweepOrigin, engine: string, fetchedAt?: string | null): boolean {
+  return origin.engine === engine && (fetchedAt === undefined || fetchedAt === origin.fetchedAt);
+}
+
+/**
+ * 「総当たりの結果に戻る」を押すと、入力が総当たりを実行したときの条件に置き換わるか。
+ * 「詳しく見る」から来た条件なら、元の総当たりに戻るだけなので false(知らせなくてよい)。
+ */
+export function showSweepReplacesInput(state: FlowState): boolean {
+  if (!canShowSweep(state) || !state.lastSweep) return false;
+  const origin = state.step === 5 && runMode(state) === "single" ? (state.last?.origin ?? null) : inspectedOrigin(state);
+  return origin?.sweepId !== state.lastSweep.id;
 }
 
 // --- 実行のエラーの振り分け ---------------------------------------------------------
@@ -578,6 +615,7 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
         fieldErrors: {},
         runError: null,
         sweepCancelled: false,
+        inspected: null,
       };
     }
 
@@ -667,13 +705,22 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
     case "runStarted": {
       // 送るリクエストが、いまの条件と同じときだけ実行中にする(記録するのは送ったリクエストそのもの)
       if (state.running || !sameRequest(action.request, currentRequest(state))) return state;
-      return { ...state, running: { id: action.id, kind: "single", request: action.request }, runError: null };
+      return {
+        ...state,
+        running: { id: action.id, kind: "single", request: action.request, origin: inspectedOrigin(state) },
+        runError: null,
+      };
     }
 
     case "runSucceeded": {
       // いま実行中のもの(番号が同じ)以外の応答は捨てる
       if (state.running?.kind !== "single" || state.running.id !== action.id) return state;
-      const last: RunRecord = { id: action.id, request: state.running.request, result: action.result };
+      const last: RunRecord = {
+        id: action.id,
+        request: state.running.request,
+        result: action.result,
+        origin: state.running.origin,
+      };
       return moveTo({ ...state, running: null, last }, 5);
     }
 
@@ -712,7 +759,8 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
         segment: "in_sample",
         selected: uniqueBest(rankingFor(action.result.rankings, "sharpe_ratio")),
       };
-      return moveTo({ ...state, running: null, lastSweep, sweepView }, 5);
+      // 前の総当たりの「詳しく見る」の出どころは、新しい総当たりのものではないので忘れる
+      return moveTo({ ...state, running: null, lastSweep, sweepView, inspected: null }, 5);
     }
 
     case "sweepFailed": {
@@ -742,13 +790,34 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
         params: { ...state.form.params, short_window: String(action.short), long_window: String(action.long) },
       };
       const next = { ...state, form, fieldErrors: {}, runError: null };
-      return currentRequest(next) ? moveTo(next, 4) : moveTo(next, 3);
+      const request = currentRequest(next);
+      if (!request) return moveTo({ ...next, inspected: null }, 3);
+      const sweep = state.lastSweep;
+      const origin: SweepOrigin = {
+        sweepId: sweep.id,
+        segment,
+        trials: sweep.result.count,
+        hasHoldout: sweep.result.segments.some((s) => s.name === "out_of_sample"),
+        engine: sweep.request.engine,
+        fetchedAt: sweep.result.data_info.fetched_at,
+      };
+      return moveTo({ ...next, inspected: { request, origin } }, 4);
     }
 
     case "showSweep": {
       if (!canShowSweep(state) || !state.lastSweep) return state;
-      // 総当たりを実行したときの条件に戻す(結果の画面の見方 sweepView はそのまま)
-      return moveTo({ ...state, form: state.lastSweep.form, fieldErrors: {}, runError: null, sweepCancelled: false }, 5);
+      // 総当たりを実行したときの条件(エンジンも)に戻す。結果の画面の見方 sweepView はそのまま
+      const next: FlowState = {
+        ...state,
+        form: state.lastSweep.form,
+        sweepEngine: state.lastSweep.request.engine,
+        fieldErrors: {},
+        runError: null,
+        sweepCancelled: false,
+      };
+      // 1組の結果(手順5)から戻るときも手順5のままなので、moveTo はフォーカスを動かさない。
+      // 押したボタンは画面ごと消えるので、ここで見出しにフォーカスを移す
+      return state.step === 5 ? { ...next, focus: focus(state, "heading") } : moveTo(next, 5);
     }
 
     case "resultAnimated":

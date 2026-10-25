@@ -203,13 +203,17 @@ const HeatGrid = memo(function HeatGrid({
   }
 
   return (
-    <div className="mt-1 overflow-x-auto pb-1">
+    // relative:読み上げ用に隠した目盛り(sr-only は position: absolute)も、この枠の中でスクロールさせる。
+    // ないと、右端の列の隠した目盛りが枠の外に出て、ページ全体が横にはみ出す
+    <div className="relative mt-1 overflow-x-auto pb-1">
       <div
         role="grid"
         aria-label={`${label}(${SEGMENT_LABELS[segment]})のヒートマップ。縦が短期の日数、横が長期の日数。矢印キーで動き、Enter で選びます`}
         aria-rowcount={shorts.length + 1}
         aria-colcount={longs.length + 1}
-        className="select-none"
+        className="heat-grid select-none"
+        // マスが細いとき(列が多いとき)は、1位の枠を内側ではなく外側に描く(内側の枠でマスの色が隠れないように。globals.css)
+        data-size={sizing.minWidth < 10 ? "tiny" : undefined}
         style={{ minWidth }}
         onMouseLeave={() => onShow(cursor)}
       >

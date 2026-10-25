@@ -89,7 +89,7 @@ make e2e          # 画面〜API の通しのテスト(Playwright)
 |---|---|
 | 仕様書(`docs/mvp.md`) | できた |
 | 株価データ・Python リファレンス・API・画面 | できた |
-| パラメータの総当たり(仕様 `docs/sweep.md`・Python 版・正解データ14ケース・API・画面) | できた(計算は Python を複数のプロセスで) |
+| パラメータの総当たり(仕様 `docs/sweep.md`・Python 版・正解データ24ケース・API・画面) | できた(計算は Python を複数のプロセスで) |
 | C++ 版エンジン | **作者が自分で書いている**(手順:`docs/cpp/README.md`。正解データとの答え合わせは CI で自動) |
 | C++ 版・GPU 版の総当たり | 計画(`docs/gpu-plan.md`。正解データと、API に差し込む場所は用意してある) |
 
@@ -125,6 +125,6 @@ A Japanese-language web app for backtesting trading rules on Japanese equities, 
 - **Look-ahead-free by construction**: signals are evaluated on the close and filled at the next tradable open; moving averages use *point-in-time* split adjustment (only factors known at time *t*), and position sizing uses unadjusted prices.
 - **Spec-first**: `docs/mvp.md` specifies every rule down to summation order, rounding and error precedence.
 - **Three-tier correctness**: a slow, readable Python reference engine is the oracle; the C++ engine (being written by the author) must match it on 60 golden cases (exact for dates, share counts and win/loss; 1e-9 relative tolerance for amounts — or bit-for-bit in strict mode), and a future CUDA parameter sweep must match the C++ engine.
-- **Parameter sweep with an honest holdout**: grid search over moving-average windows (up to 2,000 pairs in Python, run as a cancellable background job across processes), ranked on an in-sample period only and re-tested on a held-out period. The UI leads with the number of trials, the in-sample winner's out-of-sample rank and the Spearman rank correlation between the two periods, so a lucky winner is visible as such (`docs/sweep.md`, 14 golden sweep cases).
+- **Parameter sweep with an honest holdout**: grid search over moving-average windows (up to 2,000 pairs in Python, run as a cancellable background job across processes), ranked on an in-sample period only and re-tested on a held-out period. The UI leads with the number of trials, the in-sample winner's out-of-sample rank and the Spearman rank correlation between the two periods, so a lucky winner is visible as such (`docs/sweep.md`, 24 golden sweep cases).
 - **Stack**: Next.js/TypeScript (hand-drawn SVG charts and an ARIA-grid heatmap), FastAPI, J-Quants API with rate limiting and Parquet caching, pytest/GoogleTest/node:test/Playwright with automated WCAG checks, GitHub Actions CI.
 - **AI collaboration, stated honestly**: the UI, API, data layer and reference engine were written with Claude Code under the author's review; the C++/CUDA engines are the author's own work.

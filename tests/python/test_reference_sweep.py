@@ -146,9 +146,14 @@ def test_all_pairs_are_scored_on_the_same_in_sample_days(demo1003) -> None:
     valid_before = [bar.date for bar in demo1003 if bar.date < in_sample.start and bar.is_valid]
     assert len(valid_before) == 45  # いちばん長い長期日数のウォームアップがちょうどそろう日
     assert (out_of_sample.start, out_of_sample.end) == (holdout, end)
-    for segment in (IN_SAMPLE, OUT_OF_SAMPLE):
-        counts = {row.metrics.return_count for row in result.rows if row.segment == segment}
-        assert len(counts) == 1
+    # どの組み合わせ・どちらの期間も、ウォームアップが足りていて、期間の初日からシグナルを判定できる
+    for short, long in result.pairs:
+        for segment in result.segments:
+            single = run_backtest(
+                demo1003, segment.start, segment.end, COSTS.params_for(short, long)
+            )
+            assert single.warmup.sufficient, (short, long, segment.name)
+            assert single.warmup.signals_unavailable_until is None
 
 
 @pytest.mark.parametrize(

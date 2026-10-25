@@ -118,9 +118,9 @@ def test_sweep_runs_and_matches_the_reference(client: TestClient) -> None:
     in_sample, out_of_sample = result["segments"]
     # データの初日から始めたので、選ぶ期間の始まりを長期45日のウォームアップがそろう日までそろえる(docs/sweep.md 3章)
     assert in_sample["requested_start_date"] == "2022-01-04"
-    assert in_sample["start_date"] == "2022-03-11" and in_sample["skipped_business_days"] == 45
+    assert in_sample["start_date"] == "2022-03-11" and in_sample["skipped_trading_days"] == 45
     assert in_sample["end_date"] == "2025-07-31"
-    assert out_of_sample["start_date"] == HOLDOUT and out_of_sample["skipped_business_days"] == 0
+    assert out_of_sample["start_date"] == HOLDOUT and out_of_sample["skipped_trading_days"] == 0
 
     # 1つ1つの成績は、リファレンスの総当たりとまったく同じ
     bars = demo_bars("1003")
@@ -181,6 +181,34 @@ def test_without_holdout_there_is_only_one_segment(client: TestClient) -> None:
     assert sharpe["best_out_of_sample_rank"] is None and sharpe["rank_correlation"] is None
     kinds = [n["kind"] for n in result["notes"]]
     assert "no_holdout" in kinds and "selection_bias" not in kinds
+
+
+def test_skipped_days_count_only_trading_days() -> None:
+    """そろえるために飛ばした日数は、有効日だけを数える(1組のウォームアップの表示 docs/mvp.md 4.1 と同じ)。"""
+    from backend.api.sweep_convert import segments_out
+    from backend.marketdata.models import DailyBar
+    from engine.reference.sweep import IN_SAMPLE, OUT_OF_SAMPLE, Segment
+
+    def bar(day: int, close: float | None) -> DailyBar:
+        return DailyBar(dt.date(2025, 3, day), close, close, close, close, 1.0, 1.0, 1.0, None)
+
+    # 3日・4日・5日は有効日、6日は売買不成立、7日から選ぶ期間
+    bars = [
+        bar(3, 100.0),
+        bar(4, 101.0),
+        bar(5, 102.0),
+        bar(6, None),
+        bar(7, 103.0),
+        bar(10, 104.0),
+    ]
+    segments = (
+        Segment(IN_SAMPLE, dt.date(2025, 3, 7), dt.date(2025, 3, 7)),
+        Segment(OUT_OF_SAMPLE, dt.date(2025, 3, 10), dt.date(2025, 3, 10)),
+    )
+    in_sample, out_of_sample = segments_out(segments, bars, dt.date(2025, 3, 3))
+    assert in_sample.requested_start_date == dt.date(2025, 3, 3)
+    assert in_sample.skipped_trading_days == 3  # 6日(売買不成立)は数えない
+    assert out_of_sample.skipped_trading_days == 0
 
 
 def test_process_pool_gives_the_same_result(tmp_path) -> None:

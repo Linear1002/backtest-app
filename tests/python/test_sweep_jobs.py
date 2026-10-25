@@ -139,3 +139,26 @@ def test_shutdown_cancels_running_jobs_and_a_new_executor_is_made_later() -> Non
     assert jobs._executor is None
     assert wait_finished(jobs.start(spec())).status == "done"
     assert jobs._executor is not None
+
+
+def test_shutdown_while_handing_out_chunks_is_a_cancel_not_a_failure() -> None:
+    """かたまりを渡している途中でサーバーを止めても、ジョブは「中止」になる(止めた executor に渡すと例外になるため)。"""
+    holder: dict[str, SweepJobs] = {}
+
+    class ShutdownOnSecondSubmit(ThreadPoolExecutor):
+        submitted = 0
+
+        def submit(self, *args, **kwargs):
+            self.submitted += 1
+            if self.submitted == 2:
+                holder[
+                    "jobs"
+                ].shutdown()  # この executor を止める → 次の行の submit は RuntimeError
+            return super().submit(*args, **kwargs)
+
+    jobs = SweepJobs(2, executor_factory=lambda n: ShutdownOnSecondSubmit(max_workers=n))
+    holder["jobs"] = jobs
+    assert len(chunk_ranges(len(spec().pairs), 2)) > 2
+    job = wait_finished(jobs.start(spec()))
+    assert job.status == "cancelled"
+    assert job.error_kind is None

@@ -85,6 +85,7 @@ def compute_cases() -> list[SweepCase]:
     # 2025-02-03 に上場した銘柄に見立てる(売買停止の 2025-03-10〜14 が、ウォームアップの途中に入る)
     d1008_listed = [bar for bar in d1008 if bar.date >= dt.date(2025, 2, 3)]
     boundary_start = dt.date(2023, 3, 1)
+    d1001_halt = halted(d1001, d1001[5].date)
     return [
         SweepCase(
             "s01_demo1001_small_grid",
@@ -169,6 +170,16 @@ def compute_cases() -> list[SweepCase]:
             SweepGrid(2, 2, 1, 5, 5, 1),
             holdout_start=nth_business_day(d1001, boundary_start, 4),
         ),
+        SweepCase(
+            "s11_align_onto_halted_day",
+            "DEMO:1001 の6日目を売買不成立にする。データの初日から始めると、そろえた選ぶ期間の始まりは"
+            "5個目の有効日の次の営業日(売買不成立の日)。選ぶ期間はその日を含めてちょうど3営業日(通る境界)",
+            d1001_halt,
+            d1001_halt[0].date,
+            d1001_halt[40].date,
+            SweepGrid(2, 2, 1, 5, 5, 1),
+            holdout_start=d1001_halt[8].date,
+        ),
     ]
 
 
@@ -177,6 +188,11 @@ def with_bar(bars: list[Bar], day: dt.date, **changes) -> list[Bar]:
     index = next(i for i, bar in enumerate(out) if bar.date == day)
     out[index] = dataclasses.replace(out[index], **changes)
     return out
+
+
+def halted(bars: list[Bar], day: dt.date) -> list[Bar]:
+    """その日を売買不成立の日(四本値・出来高が Null)にする。"""
+    return with_bar(bars, day, open=None, high=None, low=None, close=None, volume=None)
 
 
 def valid_day_before(bars: list[Bar], start: dt.date, count: int) -> dt.date:
@@ -192,6 +208,7 @@ def error_cases() -> list[SweepCase]:
     start, end = dt.date(2023, 1, 4), dt.date(2024, 12, 30)
     # 長期60日のウォームアップには入るが、長期40日以下のウォームアップには入らない日
     only_longest = valid_day_before(d1001, start, 50)
+    d1001_halt = halted(d1001, d1001[5].date)
     swapped = list(d1001)
     swapped[10], swapped[11] = swapped[11], swapped[10]  # 日付の順番が崩れている
     return [
@@ -288,6 +305,15 @@ def error_cases() -> list[SweepCase]:
             *full(e14),
             SweepGrid(1, 1, 1, 2, 2, 1),
             costs=SweepCosts(fee_rate=0.0, slippage_rate=0.0, initial_cash=1_000_000_000.0),
+        ),
+        SweepCase(
+            "se13_align_onto_halted_day_two_days",
+            "s11 の検証期間を1日早める。売買不成立の日を含めて選ぶ期間が2営業日になる(入力の誤り)",
+            d1001_halt,
+            d1001_halt[0].date,
+            d1001_halt[40].date,
+            SweepGrid(2, 2, 1, 5, 5, 1),
+            holdout_start=d1001_halt[7].date,
         ),
     ]
 

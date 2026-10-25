@@ -3,7 +3,7 @@
 import { useEffect, useId, useState } from "react";
 
 import type { BacktestResult, Trade } from "@/lib/api.ts";
-import type { RunRecord } from "@/lib/flow.ts";
+import { sameCalculationAsSweep, type RunRecord } from "@/lib/flow.ts";
 import {
   direction,
   formatDate,
@@ -19,7 +19,7 @@ import {
 } from "@/lib/format.ts";
 
 import { Seal } from "../Seal.tsx";
-import { SweepOriginNote, type SweepOrigin } from "../sweep/SweepOriginNote.tsx";
+import { BackToSweepButton, SweepOriginNote } from "../sweep/SweepOriginNote.tsx";
 import { SecondaryButton } from "../ui.tsx";
 import { TimeSeriesCharts } from "./TimeSeriesCharts.tsx";
 
@@ -38,7 +38,7 @@ export function ResultView({
   onEditParams,
   onRestart,
   onBackToSweep = null,
-  origin = null,
+  backToSweepReplacesInput = false,
 }: {
   record: RunRecord;
   /** 結果が出たときの動きを再生するか(同じ結果に戻ってきたときは再生しない) */
@@ -48,9 +48,10 @@ export function ResultView({
   onRestart: () => void;
   /** 総当たりの結果があれば、そこへ戻る */
   onBackToSweep?: (() => void) | null;
-  /** 総当たりの結果から「詳しく見る」で開いた結果なら、その期間と試した数 */
-  origin?: SweepOrigin | null;
+  /** 戻ると、条件が総当たりを実行したときのものに置き換わる(lib/flow.ts の showSweepReplacesInput) */
+  backToSweepReplacesInput?: boolean;
 }) {
+  const origin = record.origin;
   const headingId = useId();
   const result = record.result;
   // 権利落ちは、この結果と一緒に返ってきたもの(期間内・株を持っていない日も含む)を使う。
@@ -71,8 +72,15 @@ export function ResultView({
         onEditParams={onEditParams}
         onRestart={onRestart}
         onBackToSweep={onBackToSweep}
+        backToSweepReplacesInput={backToSweepReplacesInput}
       />
-      {origin && <SweepOriginNote origin={origin} done />}
+      {origin && (
+        <SweepOriginNote
+          origin={origin}
+          done
+          sameCalculation={sameCalculationAsSweep(origin, result.engine.id, result.data_info.fetched_at)}
+        />
+      )}
       <Metrics result={result} />
       <section aria-label="チャート" className="rounded-md border border-rule bg-surface p-3 sm:p-5">
         <TimeSeriesCharts result={result} actions={actions} animate={animate} />
@@ -93,12 +101,14 @@ function Statement({
   onEditParams,
   onRestart,
   onBackToSweep,
+  backToSweepReplacesInput,
 }: {
   result: BacktestResult;
   headingId: string;
   onEditParams: () => void;
   onRestart: () => void;
   onBackToSweep: (() => void) | null;
+  backToSweepReplacesInput: boolean;
 }) {
   const m = result.metrics;
   const tone = TONE[direction(m.profit)];
@@ -147,7 +157,7 @@ function Statement({
         </div>
       </div>
       <div className="flex flex-wrap gap-2 lg:justify-end">
-        {onBackToSweep && <SecondaryButton onClick={onBackToSweep}>総当たりの結果に戻る</SecondaryButton>}
+        {onBackToSweep && <BackToSweepButton onClick={onBackToSweep} replacesInput={backToSweepReplacesInput} />}
         <SecondaryButton onClick={onEditParams}>条件を変えて試す</SecondaryButton>
         <SecondaryButton onClick={onRestart}>別の銘柄で試す</SecondaryButton>
       </div>

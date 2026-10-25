@@ -395,8 +395,11 @@ class SegmentOut(_Model):
     requested_start_date: dt.date = Field(
         description="指定された開始日。選ぶ期間の始まりをそろえたとき(docs/sweep.md 3章)だけ start_date と違う"
     )
-    skipped_business_days: int = Field(
-        description="そろえるためにウォームアップにだけ使った営業日の数(requested_start_date〜start_date の前日)"
+    skipped_trading_days: int = Field(
+        description=(
+            "そろえるためにウォームアップにだけ使った有効日(売買が成立した日)の数"
+            "(requested_start_date〜start_date の前日)。docs/mvp.md 4.1 のウォームアップの営業日数と同じ数え方"
+        )
     )
     first_business_day: dt.date
     last_business_day: dt.date

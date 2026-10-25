@@ -99,7 +99,7 @@ C++ 版の M0〜M8(`docs/cpp/README.md`)が終わってから始める。目安�
 | 段階 | 作るもの | 確かめ方 |
 |---|---|---|
 | G0 | CUDA をビルドできる状態(`-DBACKTEST_ENABLE_CUDA=ON`、`CMAKE_CUDA_ARCHITECTURES=86`、`--fmad=false`) | ベクトルの足し算が動く |
-| G1 | **Python のスイープ(正解)**:`engine/reference/sweep.py`(組み合わせを順番に `run_backtest` する)と、正解データ `tests/golden/sweeps/`(14ケース) | **できた**(Claude)。答え合わせのファイルの形は `docs/sweep.md` 11章 |
+| G1 | **Python のスイープ(正解)**:`engine/reference/sweep.py`(組み合わせを順番に `run_backtest` する)と、正解データ `tests/golden/sweeps/`(24ケース) | **できた**(Claude)。答え合わせのファイルの形は `docs/sweep.md` 11章 |
 | G2 | **C++ CPU 版のスイープ**(1スレッド → `std::thread` で複数スレッド)。`build/engine/cpp/sweep_cli` を作る | `make test-cpp` が総当たりの正解データとも比べる。速さを測る |
 | G3 | 移動平均の和の表を作る CUDA カーネル | 表が C++ の値とビット単位で一致 |
 | G4 | 組み合わせごとに売買をたどる CUDA カーネル(段階1:分割なし) | 成績が C++ 版と一致 |

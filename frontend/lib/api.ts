@@ -260,7 +260,7 @@ export type SweepSegment = {
   /** 指定した開始日。選ぶ期間の始まりをそろえたときだけ start_date と違う */
   requested_start_date: string;
   /** そろえるためにウォームアップにだけ使った営業日の数 */
-  skipped_business_days: number;
+  skipped_trading_days: number;
   first_business_day: string;
   last_business_day: string;
   business_days: number;

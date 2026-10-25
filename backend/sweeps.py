@@ -11,6 +11,7 @@
 
 スレッドの決まり:ジョブの欄(status・done・rows・output など)は、リクエストのスレッドと計算を見張るスレッドの
 両方から読み書きするので、必ず job.lock の中で読み書きする。ジョブの一覧(self._jobs)は self._lock の中で扱う。
+2つのロックを両方とるときは、self._lock → job.lock の順にする(逆の順にとるところを作らない)。
 """
 
 from __future__ import annotations
@@ -100,6 +101,11 @@ class SweepJob:
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
 
+def _status_of(job: SweepJob) -> JobStatus:
+    with job.lock:
+        return job.status
+
+
 def chunk_ranges(total: int, workers: int) -> list[tuple[int, int]]:
     """組み合わせ 0..total-1 を、(最初の位置, 終わりの位置) のかたまりに分ける(終わりの位置は含まない)。
 
@@ -141,7 +147,7 @@ class SweepJobs:
         """ジョブを始める。build は、計算が終わったら(成功したときだけ)行から結果を作る。"""
         with self._lock:
             self._forget_old()
-            running = sum(1 for job in self._jobs.values() if job.status == "running")
+            running = sum(1 for job in self._jobs.values() if _status_of(job) == "running")
             if running >= MAX_RUNNING_JOBS:
                 raise TooManyJobsError(
                     "ほかの総当たりを計算しています。終わるか中止してから、もう一度実行してください"
@@ -201,12 +207,15 @@ class SweepJobs:
         return self._executor
 
     def _forget_old(self) -> None:
+        """終わってから KEEP_FINISHED_SECONDS たったジョブを消す(self._lock の中で呼ぶ)。"""
         now = self._clock()
-        for job_id in [
-            j.id
-            for j in self._jobs.values()
-            if j.finished_at is not None and now - j.finished_at > KEEP_FINISHED_SECONDS
-        ]:
+        old = []
+        for job in self._jobs.values():
+            with job.lock:
+                finished_at = job.finished_at
+            if finished_at is not None and now - finished_at > KEEP_FINISHED_SECONDS:
+                old.append(job.id)
+        for job_id in old:
             del self._jobs[job_id]
 
     def _should_stop(self, job: SweepJob) -> bool:
@@ -227,6 +236,8 @@ class SweepJobs:
         futures: dict[Future[PairsOutcome], tuple[int, int]] = {}
         try:
             for first, end in chunk_ranges(len(spec.pairs), self.workers):
+                if self._should_stop(job):
+                    break  # 残りは渡さない(下の while で中止として片づける)
                 future = executor.submit(
                     self._runner, spec.bars, spec.segments, spec.costs, spec.pairs[first:end], first
                 )
@@ -246,7 +257,6 @@ class SweepJobs:
                     with job.lock:
                         job.done += end - first
         except Exception as error:
-            logger.exception("総当たりの計算に失敗しました(ジョブ %s)", job.id)
             for future in futures:
                 future.cancel()
             if isinstance(error, BrokenExecutor):
@@ -254,6 +264,11 @@ class SweepJobs:
                 with self._lock:
                     if self._executor is executor:
                         self._executor = None
+            if self._should_stop(job):
+                # 中止・サーバーの停止の途中で起きた失敗(止めた executor にかたまりを渡そうとした、など)は、中止として扱う
+                self._finish(job, "cancelled")
+                return
+            logger.exception("総当たりの計算に失敗しました(ジョブ %s)", job.id)
             self._finish(job, "failed", error_kind="internal", error_message=INTERNAL_ERROR)
             return
 

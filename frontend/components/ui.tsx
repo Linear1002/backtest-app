@@ -27,16 +27,20 @@ export function SecondaryButton({
   children,
   onClick,
   disabled,
+  describedBy,
 }: {
   children: React.ReactNode;
   onClick?: () => void;
   disabled?: boolean;
+  /** 押す前に読んでほしい説明の要素の id(aria-describedby) */
+  describedBy?: string;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
+      aria-describedby={describedBy}
       className="inline-flex items-center rounded-md px-4 py-2.5 text-[15px] text-ink-2 ring-1 ring-rule-strong hover:bg-surface hover:text-ink disabled:opacity-40"
     >
       {children}

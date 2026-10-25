@@ -4,6 +4,7 @@ import { test } from "node:test";
 import type { SweepCombo, SweepGrid, SweepMetrics, SweepRanking } from "./api.ts";
 import {
   competitionRank,
+  competitionRanks,
   correlationReading,
   dayBefore,
   DEFAULT_SWEEP_FORM,
@@ -215,4 +216,13 @@ test("期間ごとの値と順位(同じ値は同じ順位。値がなければ�
   // 最大ドローダウンは小さいほどよい
   const dd = [0.3, 0.1, 0.2];
   assert.deepEqual([0, 1, 2].map((i) => competitionRank(dd, i, "max_drawdown")), [3, 1, 2]);
+});
+
+test("まとめて出した順位は、1つずつ出した順位と同じ(同じ値は同じ順位・算出不可は順位なし)", () => {
+  const values = [0.5, null, 1.2, 0.5, -0.3, 1.2, 0, -0, null, 0.5];
+  for (const objective of ["sharpe_ratio", "max_drawdown"] as const) {
+    const all = competitionRanks(values, objective);
+    values.forEach((_, i) => assert.equal(all[i], competitionRank(values, i, objective), `${objective} ${i}`));
+  }
+  assert.deepEqual(competitionRanks(values, "sharpe_ratio"), [3, null, 1, 3, 8, 1, 6, 6, null, 3]);
 });

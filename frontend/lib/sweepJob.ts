@@ -5,7 +5,8 @@
 // - 問い合わせ(GET)が失敗しても、すぐに失敗にしない。待つ時間を倍にしながら数回やり直す(一時的な通信の切れ目のため)
 // - やり直しても失敗するときや、画面を閉じて問い合わせをやめるときは、ジョブの中止(DELETE)を頼む。
 //   止めないと、API はそのジョブを最大60秒計算し続け、同時に計算できる2つの枠の1つを使ってしまう
-// - ジョブが見つからない(404。API を起動し直した・30分たった)ときは、やり直さない
+// - ジョブが見つからない(404。API を起動し直した・30分たった)ときは、やり直さない(中止も頼まない)
+// - 「終わった」のに結果が入っていない応答は、失敗として扱う
 
 import { ApiError, type SweepRequest, type SweepStatus } from "./api.ts";
 
@@ -73,8 +74,10 @@ export async function runSweepJob(request: SweepRequest, options: SweepJobOption
       status = await api.sweepStatus(status.id);
       failures = 0;
     } catch (error) {
+      // ジョブがもうない(404)なら、中止を頼む相手もいない
+      if (isFatal(error)) return { kind: "error", error };
       failures += 1;
-      if (isFatal(error) || failures > retries) {
+      if (failures > retries) {
         cancelQuietly(api, status.id);
         return { kind: "error", error };
       }

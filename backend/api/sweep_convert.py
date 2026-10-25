@@ -63,14 +63,17 @@ def segments_out(
     for segment in segments:
         days = [bar.date for bar in bars if segment.start <= bar.date <= segment.end]
         requested = requested_start if segment.name == IN_SAMPLE else segment.start
-        skipped = sum(1 for bar in bars if requested <= bar.date < segment.start)
+        # 有効日だけを数える(1組のバックテストのウォームアップの表示 docs/mvp.md 4.1 と同じ数え方)
+        skipped = sum(
+            1 for bar in bars if requested <= bar.date < segment.start and bar.is_trading_day
+        )
         out.append(
             SegmentOut(
                 name=segment.name,  # type: ignore[arg-type]
                 start_date=segment.start,
                 end_date=segment.end,
                 requested_start_date=requested,
-                skipped_business_days=skipped,
+                skipped_trading_days=skipped,
                 first_business_day=days[0],
                 last_business_day=days[-1],
                 business_days=len(days),
@@ -120,7 +123,7 @@ def notes_out(context: SweepContext, count: int) -> list[NoteOut]:
     )
     has_holdout = any(s.name == OUT_OF_SAMPLE for s in context.segments)
     in_sample = context.segments[0]
-    if in_sample.skipped_business_days > 0:
+    if in_sample.start_date != in_sample.requested_start_date:
         label = "選ぶ期間" if has_holdout else "期間"
         last_skipped = in_sample.start_date - dt.timedelta(days=1)
         notes.append(
@@ -129,7 +132,7 @@ def notes_out(context: SweepContext, count: int) -> list[NoteOut]:
                 message=(
                     f"すべての組み合わせを同じ日から比べるため、{label}は {in_sample.start_date.isoformat()} から"
                     f"始めています。{in_sample.requested_start_date.isoformat()}〜{last_skipped.isoformat()} の"
-                    f"{in_sample.skipped_business_days}営業日は、長期の日数(最長{context.longest_window}日)の"
+                    f"{in_sample.skipped_trading_days}営業日は、長期の日数(最長{context.longest_window}日)の"
                     "移動平均を作るため(ウォームアップ)にだけ使いました"
                 ),
             )
