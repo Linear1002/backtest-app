@@ -101,11 +101,31 @@ export function result(symbolId: string): BacktestResult {
     skipped_orders: [],
     events: [],
     trades: [],
+    benchmark: {
+      label: "買い持ち",
+      status: "not_bought",
+      signal_date: null,
+      fill: null,
+      skipped: null,
+      events: [],
+      metrics: BENCHMARK_FLAT,
+      open_position_at_end: false,
+    },
     corporate_actions: [],
     data_info: { source_id: "demo", source_label: "架空データ", license_note: "", fetched_at: null, warning: null },
     elapsed_ms: 1,
   };
 }
+
+/** 買い持ちが何もしなかったときの成績(初期資金100万円のまま) */
+const BENCHMARK_FLAT = {
+  total_return: 0,
+  annualized_return: 0,
+  max_drawdown: 0,
+  sharpe_ratio: null,
+  return_count: 489,
+  final_equity: 1_000_000,
+};
 
 function sweepMetrics(sharpe: number | null, total: number, drawdown: number): SweepMetrics {
   return {
@@ -140,17 +160,17 @@ export function sweepResult(symbolId: string): SweepResult {
     engine: { id: "python", label: "Python", available: true, note: "", max_pairs: 2000 },
     segments: [
       // 選ぶ期間は、長期20日のウォームアップのために 2024-01-04 から 2024-02-01 に遅らせた(docs/sweep.md 3章)
-      { name: "in_sample", start_date: "2024-02-01", end_date: "2025-06-30", requested_start_date: "2024-01-04", skipped_trading_days: 20, first_business_day: "2024-02-01", last_business_day: "2025-06-30", business_days: 340 },
-      { name: "out_of_sample", start_date: "2025-07-01", end_date: "2025-12-30", requested_start_date: "2025-07-01", skipped_trading_days: 0, first_business_day: "2025-07-01", last_business_day: "2025-12-30", business_days: 130 },
+      { name: "in_sample", start_date: "2024-02-01", end_date: "2025-06-30", requested_start_date: "2024-01-04", skipped_trading_days: 20, first_business_day: "2024-02-01", last_business_day: "2025-06-30", business_days: 340, benchmark: { ...BENCHMARK_FLAT, total_return: 0.25, sharpe_ratio: 0.7, max_drawdown: 0.18, final_equity: 1_250_000 } },
+      { name: "out_of_sample", start_date: "2025-07-01", end_date: "2025-12-30", requested_start_date: "2025-07-01", skipped_trading_days: 0, first_business_day: "2025-07-01", last_business_day: "2025-12-30", business_days: 130, benchmark: { ...BENCHMARK_FLAT, total_return: 0.02, sharpe_ratio: 0.15, max_drawdown: 0.09, final_equity: 1_020_000 } },
     ],
     grid: { short_min: 3, short_max: 6, short_step: 3, long_min: 10, long_max: 20, long_step: 10, short_values: [3, 6], long_values: [10, 20] },
     params: { fee_rate_pct: 0.1, slippage_rate_pct: 0.05, fee_rate: 0.001, slippage_rate: 0.0005, initial_cash: 1_000_000, lot_size: 100, trading_days_per_year: 245 },
     count: 4,
     combos,
     rankings: [
-      { objective: "sharpe_ratio", order: [3, 1, 0, 2], best_index: 3, best_tie_count: 1, best_out_of_sample_rank: 2, in_sample_ranked: 3, out_of_sample_ranked: 4, rank_correlation: -0.2, correlation_pairs: 3, neighbors_mean: 0.4, neighbors_count: 2 },
-      { objective: "total_return", order: [3, 1, 0, 2], best_index: 3, best_tie_count: 1, best_out_of_sample_rank: 2, in_sample_ranked: 4, out_of_sample_ranked: 4, rank_correlation: 0.2, correlation_pairs: 4, neighbors_mean: 0.06, neighbors_count: 3 },
-      { objective: "max_drawdown", order: [2, 3, 1, 0], best_index: 2, best_tie_count: 1, best_out_of_sample_rank: 1, in_sample_ranked: 4, out_of_sample_ranked: 4, rank_correlation: 0.4, correlation_pairs: 4, neighbors_mean: 0.15, neighbors_count: 3 },
+      { objective: "sharpe_ratio", order: [3, 1, 0, 2], best_index: 3, best_tie_count: 1, best_out_of_sample_rank: 2, in_sample_ranked: 3, out_of_sample_ranked: 4, rank_correlation: -0.2, correlation_pairs: 3, neighbors_mean: 0.4, neighbors_count: 2, in_sample_beats_benchmark: 1, out_of_sample_beats_benchmark: 2 },
+      { objective: "total_return", order: [3, 1, 0, 2], best_index: 3, best_tie_count: 1, best_out_of_sample_rank: 2, in_sample_ranked: 4, out_of_sample_ranked: 4, rank_correlation: 0.2, correlation_pairs: 4, neighbors_mean: 0.06, neighbors_count: 3, in_sample_beats_benchmark: 1, out_of_sample_beats_benchmark: 2 },
+      { objective: "max_drawdown", order: [2, 3, 1, 0], best_index: 2, best_tie_count: 1, best_out_of_sample_rank: 1, in_sample_ranked: 4, out_of_sample_ranked: 4, rank_correlation: 0.4, correlation_pairs: 4, neighbors_mean: 0.15, neighbors_count: 3, in_sample_beats_benchmark: 4, out_of_sample_beats_benchmark: 2 },
     ],
     notes: [{ kind: "trials", message: "4通りの組み合わせを試した結果です" }],
     data_info: { source_id: "demo", source_label: "架空データ", license_note: "", fetched_at: null, warning: null },

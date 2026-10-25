@@ -112,6 +112,8 @@ export type Daily = {
   valuation_price: number | null;
   equity: number;
   drawdown: number;
+  /** 同じ日の、買い持ち(docs/benchmark.md)の資産額 */
+  benchmark_equity: number;
 };
 
 export type Fill = {
@@ -168,7 +170,39 @@ export type NoteKind =
   | "selection_bias"
   | "no_holdout"
   | "aligned_start"
-  | "sampling_error";
+  | "sampling_error"
+  | "benchmark";
+
+export type SkippedOrder = {
+  date: string;
+  signal_date: string;
+  open_price: number;
+  fill_price: number;
+  cash: number;
+};
+
+/** 買い持ちの成績(docs/mvp.md 5章と同じ定義。勝率・取引回数はない) */
+export type BenchmarkMetrics = {
+  total_return: number;
+  annualized_return: number | null;
+  max_drawdown: number;
+  sharpe_ratio: number | null;
+  return_count: number;
+  final_equity: number;
+};
+
+/** 比較の基準:買い持ち(docs/benchmark.md) */
+export type Benchmark = {
+  label: string;
+  /** bought:買った / insufficient_cash:資金不足で買えなかった / not_bought:買う日がなかった */
+  status: "bought" | "insufficient_cash" | "not_bought";
+  signal_date: string | null;
+  fill: Fill | null;
+  skipped: SkippedOrder | null;
+  events: CorporateActionEvent[];
+  metrics: BenchmarkMetrics;
+  open_position_at_end: boolean;
+};
 
 export type BacktestResult = {
   symbol: SymbolSummary;
@@ -217,15 +251,11 @@ export type BacktestResult = {
   daily: Daily[];
   signals: { date: string; side: "buy" | "sell"; action: "order" | "ignored" }[];
   fills: Fill[];
-  skipped_orders: {
-    date: string;
-    signal_date: string;
-    open_price: number;
-    fill_price: number;
-    cash: number;
-  }[];
+  skipped_orders: SkippedOrder[];
   events: CorporateActionEvent[];
   trades: Trade[];
+  /** 比較の基準:同じ期間・同じ費用の買い持ち */
+  benchmark: Benchmark;
   /** 期間内の権利落ち(株を持っていない日も含む)。チャートの線を切る位置などに使う */
   corporate_actions: CorporateAction[];
   data_info: DataInfo;
@@ -264,6 +294,8 @@ export type SweepSegment = {
   first_business_day: string;
   last_business_day: string;
   business_days: number;
+  /** この期間の買い持ち(docs/benchmark.md)の成績 */
+  benchmark: BenchmarkMetrics;
 };
 
 export type SweepMetrics = {
@@ -301,6 +333,10 @@ export type SweepRanking = {
   best_out_of_sample_rank: number | null;
   in_sample_ranked: number;
   out_of_sample_ranked: number;
+  /** 選ぶ期間で、買い持ちより良かった組み合わせの数(買い持ちの値が算出不可なら null) */
+  in_sample_beats_benchmark: number | null;
+  /** 検証期間で、買い持ちより良かった組み合わせの数 */
+  out_of_sample_beats_benchmark: number | null;
   rank_correlation: number | null;
   correlation_pairs: number;
   neighbors_mean: number | null;

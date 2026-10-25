@@ -38,6 +38,8 @@ export function TimeSeriesCharts({ result, actions, animate }: Props) {
   const [hover, setHover] = useState<number | null>(null);
   const index = hover ?? n - 1;
   const compact = width < 640;
+  // 比較の買い持ち(docs/benchmark.md)は、買えたときだけ資産額の段に点線で描く
+  const showBenchmark = result.benchmark.status === "bought";
 
   const heights = compact ? { price: 210, equity: 120, dd: 80 } : { price: 290, equity: 150, dd: 96 };
   const top = {
@@ -63,6 +65,7 @@ export function TimeSeriesCharts({ result, actions, animate }: Props) {
     const yPrice = linearScale([pMin, pMax], [top.price + heights.price, top.price]);
 
     const equityValues = daily.map((d) => d.equity).concat(result.params.initial_cash);
+    if (showBenchmark) for (const d of daily) equityValues.push(d.benchmark_equity);
     const [eMin, eMax] = paddedExtent(equityValues);
     const yEquity = linearScale([eMin, eMax], [top.equity + heights.equity, top.equity]);
 
@@ -107,12 +110,13 @@ export function TimeSeriesCharts({ result, actions, animate }: Props) {
       shortPath: series((i) => daily[i].short_ma, yPrice, true),
       longPath: series((i) => daily[i].long_ma, yPrice, true),
       equityPath: series((i) => daily[i].equity, yEquity),
+      benchmarkPath: showBenchmark ? series((i) => daily[i].benchmark_equity, yEquity) : null,
       equityArea: areaPath(daily.map((d, i) => [x(i), yEquity(d.equity)] as const), top.equity + heights.equity),
       ddPath: series((i) => daily[i].drawdown, yDd),
       ddArea: areaPath(daily.map((d, i) => [x(i), yDd(d.drawdown)] as const), top.dd),
       xTicks: dateTicks(daily.map((d) => d.date), compact ? 4 : 8),
     };
-  }, [daily, n, width, compact, actions, result.fills, result.params.initial_cash, heights.price, heights.equity, heights.dd, top.price, top.equity, top.dd]);
+  }, [daily, n, width, compact, actions, result.fills, result.params.initial_cash, showBenchmark, heights.price, heights.equity, heights.dd, top.price, top.equity, top.dd]);
 
   const { x, yPrice, yEquity, yDd } = geometry;
   // 印の大きさ:同じ向き(買い同士・売り同士)の印がいちばん近いときの間隔に合わせて小さくする
@@ -156,6 +160,7 @@ export function TimeSeriesCharts({ result, actions, animate }: Props) {
     formatDateLong(current.date),
     `終値 ${current.close === null ? "売買なし" : `${formatPrice(current.close)}円`}`,
     `資産額 ${formatYen(current.equity)}`,
+    ...(showBenchmark ? [`買い持ちの資産額 ${formatYen(current.benchmark_equity)}`] : []),
     `ドローダウン ${formatPercent(current.drawdown, { digits: 1 })}`,
     `株数 ${current.shares.toLocaleString("ja-JP")}株`,
   ].join("、");
@@ -271,6 +276,17 @@ export function TimeSeriesCharts({ result, actions, animate }: Props) {
             初期資金
           </text>
           <path d={geometry.equityArea} fill="var(--ink)" opacity={0.06} />
+          {geometry.benchmarkPath && (
+            // 比較の買い持ち:灰色の点線(色だけでなく線の形でも見分けられるように)
+            <path
+              d={geometry.benchmarkPath}
+              fill="none"
+              stroke="var(--ink-3)"
+              strokeWidth={1.5}
+              strokeDasharray="5 4"
+              strokeLinejoin="round"
+            />
+          )}
           <path
             d={geometry.equityPath}
             fill="none"
@@ -310,6 +326,7 @@ export function TimeSeriesCharts({ result, actions, animate }: Props) {
             <g pointerEvents="none">
               <line x1={x(index)} x2={x(index)} y1={top.price} y2={top.dd + heights.dd} stroke="var(--ink-2)" strokeWidth={1} />
               {current.close !== null && <Dot x={x(index)} y={yPrice(current.close)} color="var(--price)" />}
+              {showBenchmark && <Dot x={x(index)} y={yEquity(current.benchmark_equity)} color="var(--ink-3)" />}
               <Dot x={x(index)} y={yEquity(current.equity)} color="var(--ink)" />
               <Dot x={x(index)} y={yDd(current.drawdown)} color="var(--ai)" />
             </g>
@@ -356,6 +373,14 @@ function LineKey({ color }: { color: string }) {
   return <span className="inline-block h-0.5 w-4 rounded" style={{ background: color }} aria-hidden="true" />;
 }
 
+function DashedKey() {
+  return (
+    <svg width="16" height="4" aria-hidden="true" className="inline-block">
+      <line x1="0" x2="16" y1="2" y2="2" stroke="var(--ink-3)" strokeWidth="1.5" strokeDasharray="5 4" />
+    </svg>
+  );
+}
+
 function Legend({ result }: { result: BacktestResult }) {
   return (
     <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[13px] text-ink-2">
@@ -383,6 +408,12 @@ function Legend({ result }: { result: BacktestResult }) {
         </span>
         売りの約定
       </span>
+      {result.benchmark.status === "bought" && (
+        <span className="inline-flex items-center gap-1.5">
+          <DashedKey />
+          買い持ちの資産額(比較)
+        </span>
+      )}
     </div>
   );
 }
@@ -404,6 +435,13 @@ function Readout({ result, index }: { result: BacktestResult; index: number }) {
       {item("短期線", formatPrice(d.short_ma), "var(--ma-short)")}
       {item("長期線", formatPrice(d.long_ma), "var(--ma-long)")}
       {item("資産額", formatYen(d.equity), "var(--ink)")}
+      {result.benchmark.status === "bought" && (
+        <span className="inline-flex items-baseline gap-1.5">
+          <DashedKey />
+          <span className="text-ink-3">買い持ち</span>
+          <span className="font-bold text-ink">{formatYen(d.benchmark_equity)}</span>
+        </span>
+      )}
       {item("ドローダウン", formatPercent(d.drawdown, { digits: 1 }), "var(--ai)")}
       {item("株数", `${d.shares.toLocaleString("ja-JP")}株`)}
     </div>

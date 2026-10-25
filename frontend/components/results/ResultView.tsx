@@ -3,6 +3,7 @@
 import { useEffect, useId, useState } from "react";
 
 import type { BacktestResult, Trade } from "@/lib/api.ts";
+import { benchmarkUnavailable, returnGap } from "@/lib/benchmark.ts";
 import { sameCalculationAsSweep, type RunRecord } from "@/lib/flow.ts";
 import {
   direction,
@@ -154,6 +155,7 @@ function Statement({
               {formatYen(m.final_equity)}
             </span>
           </div>
+          <BenchmarkLine result={result} />
         </div>
       </div>
       <div className="flex flex-wrap gap-2 lg:justify-end">
@@ -165,6 +167,35 @@ function Statement({
   );
 }
 
+/** 計算書の下の「比べると」:同じ期間・同じ費用の買い持ち(docs/benchmark.md)。 */
+function BenchmarkLine({ result }: { result: BacktestResult }) {
+  const b = result.benchmark;
+  const unavailable = benchmarkUnavailable(b, result.params.lot_size);
+  return (
+    <div className="mt-4 rounded-md bg-surface-2 px-3 py-2.5 text-[14px]">
+      {unavailable ? (
+        <p className="text-ink-2">比べると:{unavailable}</p>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+            <span className="text-ink-2">比べると:同じ期間の買い持ちなら</span>
+            <span className="tabular text-ink">
+              {formatYen(b.metrics.final_equity)}
+              <span className={`ml-1 ${TONE[direction(b.metrics.total_return)]}`}>
+                ({formatPercent(b.metrics.total_return, { signed: true })})
+              </span>
+            </span>
+          </div>
+          <p className="mt-1 text-[13px] text-ink-2">
+            この売買ルールの総リターンは、<b className="text-ink">{returnGap(result.metrics.total_return, b.metrics.total_return)}</b>
+            でした(同じ手数料・スリッページ。配当は含めません)。
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 // --- 成績表 -----------------------------------------------------------------------
 
 function Metrics({ result }: { result: BacktestResult }) {
@@ -173,11 +204,14 @@ function Metrics({ result }: { result: BacktestResult }) {
   // 値が出せないとき(算出不可)は「参考値」を付けない
   const reference = m.annualized_return !== null && result.notes.some((n) => n.kind === "annualized_reference");
   const losses = m.trade_count - m.winning_trades;
-  const rows: { label: string; value: React.ReactNode; help: string }[] = [
+  // 買い持ちの値(買えたときだけ。買えなかったときは初期資金のままで、比べても意味がないため出さない)
+  const bm = result.benchmark.status === "bought" ? result.benchmark.metrics : null;
+  const rows: { label: string; value: React.ReactNode; help: string; benchmark?: string | null }[] = [
     {
       label: "総リターン",
       value: <span className={TONE[direction(m.total_return)]}>{formatPercent(m.total_return, { signed: true })}</span>,
       help: "最終資産 ÷ 初期資金 − 1",
+      benchmark: bm && formatPercent(bm.total_return, { signed: true }),
     },
     {
       label: "年率リターン",
@@ -190,16 +224,19 @@ function Metrics({ result }: { result: BacktestResult }) {
         </>
       ),
       help: `1年(${result.params.trading_days_per_year}営業日)あたりに直した値`,
+      benchmark: bm && formatPercent(bm.annualized_return, { signed: true }),
     },
     {
       label: "最大ドローダウン",
       value: formatPercent(m.max_drawdown),
       help: "それまでの最高値から最も大きく減ったときの割合",
+      benchmark: bm && formatPercent(bm.max_drawdown),
     },
     {
       label: "シャープレシオ",
       value: formatNumber(m.sharpe_ratio),
       help: "値動きの大きさの割に、どれだけ増えたか(無リスク金利0)",
+      benchmark: bm && formatNumber(bm.sharpe_ratio),
     },
     {
       label: "勝率",
@@ -234,7 +271,12 @@ function Metrics({ result }: { result: BacktestResult }) {
               {row.label}
               <span className="block text-[12px] leading-5 text-ink-3">{row.help}</span>
             </dt>
-            <dd className="text-right text-[20px] font-bold text-ink">{row.value}</dd>
+            <dd className="text-right text-[20px] font-bold text-ink">
+              {row.value}
+              {row.benchmark && (
+                <span className="block text-[12px] font-normal text-ink-3">買い持ち {row.benchmark}</span>
+              )}
+            </dd>
           </div>
         ))}
       </dl>
@@ -262,11 +304,11 @@ function DailyTable({ result }: { result: BacktestResult }) {
       </button>
       {open && (
         <div className="mt-3 max-h-[28rem] overflow-auto rounded-md border border-rule">
-          <table className="w-full min-w-[44rem] text-[13px] tabular">
+          <table className="w-full min-w-[50rem] text-[13px] tabular">
             <caption className="sr-only">日々の数値</caption>
             <thead className="sticky top-0 bg-surface-2 text-ink-2">
               <tr>
-                {["日付", "終値", "短期線", "長期線", "株数", "現金", "資産額", "ドローダウン"].map((h) => (
+                {["日付", "終値", "短期線", "長期線", "株数", "現金", "資産額", "ドローダウン", "買い持ちの資産額"].map((h) => (
                   <th key={h} scope="col" className="px-3 py-2 text-right font-normal first:text-left">
                     {h}
                   </th>
@@ -284,6 +326,7 @@ function DailyTable({ result }: { result: BacktestResult }) {
                   <td className="px-3 py-1.5 text-right">{formatYen(d.cash)}</td>
                   <td className="px-3 py-1.5 text-right">{formatYen(d.equity)}</td>
                   <td className="px-3 py-1.5 text-right">{formatPercent(d.drawdown, { digits: 1 })}</td>
+                  <td className="px-3 py-1.5 text-right text-ink-2">{formatYen(d.benchmark_equity)}</td>
                 </tr>
               ))}
             </tbody>

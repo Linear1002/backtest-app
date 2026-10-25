@@ -40,6 +40,7 @@ export function Heatmap({
   bestIndex,
   selected,
   onSelect,
+  benchmark = null,
 }: {
   result: SweepResult;
   objective: Objective;
@@ -49,6 +50,8 @@ export function Heatmap({
   /** 選んでいるマス(下の「選んだ組み合わせ」に出る) */
   selected: number | null;
   onSelect: (index: number) => void;
+  /** 色を付けている期間の、買い持ちの値(凡例の物差しに印を付ける。算出不可なら null) */
+  benchmark?: number | null;
 }) {
   const shorts = result.grid.short_values;
   const longs = result.grid.long_values;
@@ -112,7 +115,7 @@ export function Heatmap({
         onSelect={onSelect}
         onShow={setShown}
       />
-      <Legend objective={objective} scaleMax={scaleMax} clamped={clamped} />
+      <Legend objective={objective} scaleMax={scaleMax} clamped={clamped} benchmark={benchmark} />
     </div>
   );
 }
@@ -292,8 +295,23 @@ const HeatGrid = memo(function HeatGrid({
 });
 
 /** 色の物差し(凡例)。 */
-function Legend({ objective, scaleMax, clamped }: { objective: Objective; scaleMax: number; clamped: boolean }) {
+function Legend({
+  objective,
+  scaleMax,
+  clamped,
+  benchmark,
+}: {
+  objective: Objective;
+  scaleMax: number;
+  clamped: boolean;
+  benchmark: number | null;
+}) {
   const diverging = objective !== "max_drawdown";
+  // 買い持ちの値の、物差しの上の位置(0〜1。はみ出すときは端)
+  const benchmarkAt =
+    benchmark === null
+      ? null
+      : Math.min(1, Math.max(0, diverging ? (benchmark / scaleMax + 1) / 2 : benchmark / scaleMax));
   const steps = diverging ? [-1, -0.5, 0, 0.5, 1] : [0, 0.25, 0.5, 0.75, 1];
   const gradient = steps.map((t) => heatColor(heatTone(t * scaleMax, objective, scaleMax))).join(", ");
   const ends = diverging
@@ -303,7 +321,15 @@ function Legend({ objective, scaleMax, clamped }: { objective: Objective; scaleM
     <div className="mt-4 space-y-2 text-[12px] text-ink-2">
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
         <div className="min-w-[14rem] flex-1 sm:max-w-[22rem]">
-          <div aria-hidden="true" className="h-2.5 rounded-sm" style={{ background: `linear-gradient(to right, ${gradient})` }} />
+          <div aria-hidden="true" className="relative h-2.5 rounded-sm" style={{ background: `linear-gradient(to right, ${gradient})` }}>
+            {benchmarkAt !== null && (
+              // 買い持ちの値の位置に、墨の縦線(面の色で縁取り)
+              <span
+                className="absolute -top-1 h-[18px] w-[3px] -translate-x-1/2 rounded-sm bg-ink"
+                style={{ left: `${benchmarkAt * 100}%`, boxShadow: "0 0 0 1.5px var(--surface)" }}
+              />
+            )}
+          </div>
           <div className="mt-1 flex justify-between tabular">
             {ends.map((text, i) => (
               <span key={i}>{text}</span>
@@ -325,6 +351,12 @@ function Legend({ objective, scaleMax, clamped }: { objective: Objective; scaleM
           <span aria-hidden="true" className="inline-grid h-4 w-6 place-items-center bg-surface text-ink-3 ring-1 ring-rule">−</span>
           算出不可
         </span>
+        {benchmark !== null && (
+          <span className="inline-flex items-center gap-2">
+            <span aria-hidden="true" className="inline-block h-4 w-[3px] rounded-sm bg-ink" />
+            物差しの縦線:買い持ち({formatObjective(benchmark, objective)})
+          </span>
+        )}
       </div>
       <p className="text-ink-3">
         色の物差しは選ぶ期間の値で決めています(検証期間の値で決めると、検証期間の情報が選ぶ画面に入るため)。
