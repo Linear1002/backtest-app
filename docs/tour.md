@@ -121,7 +121,7 @@ Python で書いた「正解」。遅くてよいので、仕様の文と1対1�
 | `tests/python/test_api.py` ほか | API・入力チェック・データ層・設定 | 同上 |
 | `tests/fixtures/` + `test_param_contract.py` | 画面と API で共有する表:パラメータの定義(`ma_cross_params.json`)と、入力 → メッセージ(`param_messages.json`・`period_messages.json`・`sweep_messages.json`)。画面のテスト(`lib/form.test.ts`・`lib/sweep.test.ts`)も同じ表を読むので、片方だけ変えるとどちらかが落ちる | 同上 |
 | `tests/golden/` + `test_golden.py` | 正解データ(60ケース)。リファレンスがビット単位で再現すること(`make test` の pytest で動く)、C++ 版があれば一致すること(`make test-cpp`) | `make test`・`make test-cpp` |
-| `tests/golden/sweeps/` + `test_golden_sweep.py` | 総当たりの正解データ(14ケース。9章) | 同上 |
+| `tests/golden/sweeps/` + `test_golden_sweep.py` | 総当たりの正解データ(24ケース。9章) | 同上 |
 | `tests/cpp/` | C++ のビルド確認(C++ 版のテストは `engine/cpp/tests/` に自分で書く) | `ctest --test-dir build` |
 | `frontend/lib/*.test.ts` | 画面の状態遷移・入力チェック・目盛り・表示 | `npm --prefix frontend test` |
 | `frontend/e2e/` | 画面〜API〜エンジンを通しで(架空データ)。各手順でアクセシビリティの自動チェック | `make e2e` |
@@ -169,7 +169,7 @@ flowchart LR
 | `backend/api/validation.py` の `validate_sweep_inputs`・`validate_holdout` | 格子・検証期間の入力チェック。画面の `lib/sweep.ts` と同じ文を返す(`tests/fixtures/sweep_messages.json`) | |
 | `frontend/lib/sweep.ts` | 組み合わせの数、検証期間の開始日の決め方(最後の3割など)、ヒートマップの色(物差しは選ぶ期間の値だけ)、順位相関の読み方の目安 | 画面に依存しない関数だけ。`sweep.test.ts` で確かめる |
 | `frontend/lib/sweepJob.ts` | ジョブを始めて、終わるまで途中経過を問い合わせる。失敗したら待つ時間を倍にしてやり直し、だめならジョブの中止を頼む | API を差し替えて、失敗・中止・画面を閉じたときの流れを `sweepJob.test.ts` で確かめる |
-| `frontend/lib/flow.ts` | 1組のバックテストと同じ reducer に、総当たりの状態(実行中・途中経過・中止・結果・結果の画面の見方)を足した | 1組と総当たりの結果は別々に覚える。「詳しく見る」(`inspectCombo`)は、その期間だけの1組の条件にする(数字が総当たりの行と一致する)。「総当たりの結果に戻る」で、総当たりを実行したときの条件に戻す |
+| `frontend/lib/flow.ts` | 1組のバックテストと同じ reducer に、総当たりの状態(実行中・途中経過・中止・結果・結果の画面の見方)を足した | 1組と総当たりの結果は別々に覚える。「詳しく見る」(`inspectCombo`)は、その期間だけの1組の条件にし、出どころを記録する(その条件で実行した結果にだけ「総当たりの中から選んだ」と書く)。「総当たりの結果に戻る」で、総当たりを実行したときの条件に戻す |
 | `frontend/components/sweep/` | `SweepView.tsx`(まとめ・上位の表・選んだマスの成績・注記)と `Heatmap.tsx`(ARIA の grid。矢印キーで動き、Enter で選ぶ) | 色だけに頼らない:選んだマスの値は読み取り欄に文字で出し、全部の値は「表で見る」で読める |
 
 **総当たり1回で起きること**

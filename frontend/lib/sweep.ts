@@ -316,3 +316,18 @@ export function competitionRank(values: readonly (number | null)[], index: numbe
   const better = values.filter((v) => v !== null && (larger ? v > target : v < target)).length;
   return 1 + better;
 }
+
+/**
+ * すべての組み合わせの順位(competitionRank と同じ決め方)を、まとめて出す。
+ * 1つずつ competitionRank を呼ぶと組み合わせの数の2乗の比較になるので、表のように全部の順位がいるときはこちらを使う。
+ */
+export function competitionRanks(values: readonly (number | null)[], objective: Objective): (number | null)[] {
+  const larger = LARGER_IS_BETTER[objective];
+  const sorted = values.filter((v): v is number => v !== null).sort((a, b) => (larger ? b - a : a - b));
+  // 値ごとに、よい順に並べて最初に出てくる位置(= それより良い値の数)
+  const better = new Map<number, number>();
+  sorted.forEach((v, i) => {
+    if (!better.has(v)) better.set(v, i);
+  });
+  return values.map((v) => (v === null ? null : 1 + better.get(v)!));
+}

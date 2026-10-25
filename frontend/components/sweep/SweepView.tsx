@@ -4,13 +4,14 @@
 // 何通り試したか・選ぶ期間の1位・その組み合わせの検証期間の成績を、いちばん上に並べて見せる(過剰最適化を隠さない)。
 // 画面の見方(並べる基準・色を付ける期間・選んだ組み合わせ)は lib/flow.ts が持つ(1組の結果を見て戻ってきても残る)。
 
-import { memo, useCallback, useId, useState } from "react";
+import { memo, useCallback, useId, useMemo, useState } from "react";
 
 import type { Objective, SegmentName, SweepCombo, SweepMetrics, SweepResult, SweepSegment } from "@/lib/api.ts";
 import type { SweepRecord, SweepViewState } from "@/lib/flow.ts";
 import { direction, formatDate, formatDateTimeJst, formatNumber, formatPercent, formatRatePct, formatYen } from "@/lib/format.ts";
 import {
   competitionRank,
+  competitionRanks,
   correlationReading,
   OBJECTIVE_LABELS,
   OBJECTIVES,
@@ -155,10 +156,10 @@ function Header({
           {outOfSample ? "選ぶ期間" : "期間"} {segmentPeriod(inSample)}
           {outOfSample ? ` ・ 検証期間 ${segmentPeriod(outOfSample)}` : " ・ 検証期間なし"}
         </p>
-        {inSample.skipped_business_days > 0 && (
+        {inSample.start_date !== inSample.requested_start_date && (
           <p className="mt-0.5 text-[13px] text-ink-3">
             ※ すべての組み合わせを同じ日から比べるため、{formatDate(inSample.requested_start_date)}からの
-            {count.format(inSample.skipped_business_days)}営業日は、移動平均を作るため(ウォームアップ)にだけ使いました。
+            {count.format(inSample.skipped_trading_days)}営業日は、移動平均を作るため(ウォームアップ)にだけ使いました。
           </p>
         )}
         <p className="mt-0.5 text-[13px] text-ink-3">
@@ -275,7 +276,9 @@ function Summary({
               <span className="block text-[22px]">
                 {ranking.rank_correlation === null ? "−" : formatNumber(ranking.rank_correlation)}
               </span>
-              <span className="text-[13px] font-normal text-ink-2">{count.format(ranking.correlation_pairs)}通りで計算</span>
+              {ranking.rank_correlation !== null && (
+                <span className="text-[13px] font-normal text-ink-2">{count.format(ranking.correlation_pairs)}通りで計算</span>
+              )}
             </Row>
           </>
         ) : (
@@ -521,7 +524,11 @@ const AllCombosTable = memo(function AllCombosTable({ result, objective }: { res
   const [open, setOpen] = useState(false);
   const ranking = rankingFor(result.rankings, objective);
   const hasHoldout = result.combos.some((c) => c.out_of_sample !== null);
-  const isValues = segmentValues(result.combos, "in_sample", objective);
+  // 順位は表を開いたとき(・基準を変えたとき)に1回だけ出す(2,000行で1行ずつ全部と比べると重いため)
+  const ranks = useMemo(
+    () => (open ? competitionRanks(segmentValues(result.combos, "in_sample", objective), objective) : []),
+    [open, result.combos, objective],
+  );
   const cell = (combo: SweepCombo, which: "in_sample" | "out_of_sample", key: Objective) => {
     const m = combo[which];
     return m ? formatObjective(m[key] as number | null, key) : "−";
@@ -564,7 +571,7 @@ const AllCombosTable = memo(function AllCombosTable({ result, objective }: { res
                 const combo = result.combos[index];
                 return (
                   <tr key={index}>
-                    <td className="px-3 py-1.5 text-left text-ink-2">{competitionRank(isValues, index, objective) ?? "−"}</td>
+                    <td className="px-3 py-1.5 text-left text-ink-2">{ranks[index] ?? "−"}</td>
                     <td className="px-3 py-1.5 text-left">{combo.short_window}日</td>
                     <td className="px-3 py-1.5 text-left">{combo.long_window}日</td>
                     {OBJECTIVES.map((o) => (

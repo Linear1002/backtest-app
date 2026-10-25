@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
-import { api, errorMessage, type ParamKey, type SymbolSummary } from "@/lib/api.ts";
+import { api, ApiError, errorMessage, type ParamKey, type SymbolSummary } from "@/lib/api.ts";
 import {
   canShowSweep,
   canVisit,
@@ -12,13 +12,14 @@ import {
   flowReducer,
   holdoutOf,
   initialFlow,
+  inspectedOrigin,
   needsSymbolLoad,
   resultIsOutdated,
   runErrorMessage,
   runMode,
   selectedStrategy,
+  showSweepReplacesInput,
   sweepEngineInfo,
-  sweepOrigin,
   unplacedErrorMessage,
   type FlowState,
   type StepId,
@@ -166,7 +167,10 @@ export function BacktestApp() {
         return;
       }
       case "stopped":
-        return; // 画面を閉じた
+        // 問い合わせをやめた(画面を閉じた・開発中の再読み込み)。ジョブの中止は頼んである。
+        // 画面が残っているとき(開発中の再読み込み)に「計算しています」のまま止まらないよう、中止したことにする
+        dispatch({ type: "sweepCancelled", id });
+        return;
     }
   }
 
@@ -177,7 +181,11 @@ export function BacktestApp() {
     // 中止できたことは、問い合わせの続き(status が cancelled)で受け取る。頼めなかったときだけ、ここで知らせる
     api
       .cancelSweep(running.jobId)
-      .catch((e: unknown) => setCancelError(errorMessage(e, "中止できませんでした。もう一度押してください")));
+      .catch((e: unknown) =>
+        setCancelError(
+          e instanceof ApiError ? `中止できませんでした:${e.message}` : "中止できませんでした。もう一度押してください",
+        ),
+      );
   }
 
   // 結果の動きを再生し終えたら記録する(dispatch は変わらないので、この関数も描き直しで変わらない)
@@ -305,8 +313,9 @@ export function BacktestApp() {
                 error={state.runError}
                 outdated={resultIsOutdated(state)}
                 onRun={run}
-                origin={sweepOrigin(state.lastSweep, request)}
+                origin={inspectedOrigin(state)}
                 onBackToSweep={backToSweep}
+                backToSweepReplacesInput={showSweepReplacesInput(state)}
               />
             ) : (
               inputError
@@ -344,7 +353,7 @@ export function BacktestApp() {
               onEditParams={() => goTo(3)}
               onRestart={() => goTo(1)}
               onBackToSweep={backToSweep}
-              origin={sweepOrigin(state.lastSweep, state.last.request)}
+              backToSweepReplacesInput={showSweepReplacesInput(state)}
             />
           )}
           {state.step === 5 && mode === "sweep" && state.lastSweep && (

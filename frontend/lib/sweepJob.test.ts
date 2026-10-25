@@ -88,6 +88,13 @@ test("ジョブが見つからない(404)ときは、やり直さない", async 
   const outcome = await runSweepJob(REQUEST, options(api).opts);
   assert.equal(outcome.kind, "error");
   assert.equal(calls.polls, 1);
+  assert.equal(calls.cancels, 0); // ジョブはもうないので、中止も頼まない
+});
+
+test("「終わった」のに結果が入っていない応答は、失敗にする", async () => {
+  const { api } = scripted(status("running"), [status("done", 4)]);
+  const outcome = await runSweepJob(REQUEST, options(api).opts);
+  assert.deepEqual(outcome, { kind: "failed", message: "総当たりを実行できませんでした" });
 });
 
 test("画面を閉じたら問い合わせをやめて、ジョブの中止を頼む", async () => {

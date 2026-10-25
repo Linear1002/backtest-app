@@ -182,6 +182,47 @@ test("総当たり:ヒートマップと検証期間の成績を見て、1マス
   await expect(page.getByRole("heading", { name: "まとめ" })).toBeVisible();
 });
 
+test("総当たり:列の多い格子でも、ページは横にはみ出さず、ヒートマップだけが横にスクロールする @mobile", async ({ page }) => {
+  await chooseSymbol(page, "1001", "1001");
+  await page.getByRole("radio", { name: /総当たりで比べる/ }).check();
+  // 短期2〜3日 × 長期10〜130日(2日ごと)= 61列 × 2行 = 122通り。検証期間は使わない
+  for (const [label, value] of [
+    ["短期の日数の最小", "2"],
+    ["短期の日数の最大", "3"],
+    ["短期の日数の刻み", "1"],
+    ["長期の日数の最小", "10"],
+    ["長期の日数の最大", "130"],
+    ["長期の日数の刻み", "2"],
+  ] as const) {
+    await page.getByLabel(label).fill(value);
+  }
+  await page.getByRole("group", { name: "検証期間の決め方" }).getByRole("button", { name: "使わない" }).click();
+  await expect(page.getByText(/組み合わせ:122通り/)).toBeVisible();
+  await page.getByRole("button", { name: "確認へ進む", exact: true }).click();
+  await page.getByRole("button", { name: /総当たりを実行/ }).click();
+  await expect(page.getByRole("heading", { name: "まとめ" })).toBeVisible({ timeout: 60_000 });
+
+  const grid = page.getByRole("grid");
+  await expect(grid).toHaveAttribute("data-size", "tiny");
+  // ページ全体は横にはみ出さない。はみ出す分は、ヒートマップの枠の中だけでスクロールする
+  const pageOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(pageOverflow).toBeLessThanOrEqual(0);
+  const scroller = grid.locator("xpath=..");
+  const sizes = await scroller.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+  expect(sizes.scroll).toBeGreaterThan(sizes.client);
+  // マスは細くなりすぎない(最小6px)
+  const cellWidth = await grid.locator("[role=gridcell]").first().evaluate((el) => el.getBoundingClientRect().width);
+  expect(cellWidth).toBeGreaterThanOrEqual(6);
+
+  // キーボードで右端の列へ動くと、そのマスが見えるところまで枠の中がスクロールする
+  const current = grid.locator('[role=gridcell][tabindex="0"]');
+  await current.focus();
+  await page.keyboard.press("End");
+  await expect(page.locator(":focus")).toHaveAttribute("aria-label", /長期130日/);
+  expect(await scroller.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
+  await expectNoA11yViolations(page, "列の多い総当たりの結果(スマートフォン)");
+});
+
 test("スマートフォンの幅でも、取引の記録が読める @mobile", async ({ page }) => {
   await chooseSymbol(page, "あさつゆ", "1004");
   await runFromParams(page);

@@ -101,6 +101,16 @@
       "input_rows": 1119
     },
     {
+      "name": "s11_align_onto_halted_day",
+      "title": "DEMO:1001 の6日目を売買不成立にする。データの初日から始めると、そろえた選ぶ期間の始まりは5個目の有効日の次の営業日(売買不成立の日)。選ぶ期間はその日を含めてちょうど3営業日(通る境界)",
+      "kind": "compute",
+      "stage": 1,
+      "expected_error": null,
+      "pairs": 1,
+      "segments": 2,
+      "input_rows": 1119
+    },
+    {
       "name": "se01_no_pairs",
       "title": "短期 ≥ 長期 の組しかない(入力の誤り)",
       "kind": "error",
@@ -219,6 +229,16 @@
       "pairs": 0,
       "segments": 0,
       "input_rows": 5
+    },
+    {
+      "name": "se13_align_onto_halted_day_two_days",
+      "title": "s11 の検証期間を1日早める。売買不成立の日を含めて選ぶ期間が2営業日になる(入力の誤り)",
+      "kind": "error",
+      "stage": 1,
+      "expected_error": "input",
+      "pairs": 0,
+      "segments": 0,
+      "input_rows": 1119
     }
   ]
 }

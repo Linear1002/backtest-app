@@ -232,3 +232,20 @@ h3 {
   outline-offset: 1px;
   z-index: 1;
 }
+/* 列が多くマスが細いとき(最小6px):内側の枠(左右で7px)だとマスの色が隠れるので、1位は外側に枠を描く。
+   選んだマスの点も小さくする */
+.heat-grid[data-size="tiny"] .heat-cell[data-best="true"] {
+  box-shadow: none;
+  outline: 2px solid var(--ink);
+  outline-offset: 0;
+  z-index: 1;
+}
+.heat-grid[data-size="tiny"] .heat-cell[data-best="true"]:focus-visible {
+  outline-offset: 2px; /* フォーカスしたときは、1位の枠と離して描く */
+}
+.heat-grid[data-size="tiny"] .heat-cell[aria-selected="true"]::after {
+  width: 4px;
+  height: 4px;
+  margin: -2px 0 0 -2px;
+  box-shadow: 0 0 0 1px var(--surface);
+}

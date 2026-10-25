@@ -165,12 +165,13 @@ export function SweepConfirmStep({
         </p>
       )}
 
+      {/* 読み上げは区切り(始め・4分の1・半分・4分の3)だけ。数字は見た目の文とバーで伝える。
+          読み上げの領域は実行していないときも置いておく(実行と同時に作ると、最初の区切りが読まれにくいため) */}
+      <p className="sr-only" aria-live="polite">
+        {running ? `総当たりの${milestone}` : ""}
+      </p>
       {running && (
         <div className="mt-8 rounded-md border border-rule bg-surface px-4 py-3">
-          {/* 読み上げは区切り(始め・4分の1・半分・4分の3)だけ。数字は見た目の文とバーで伝える */}
-          <p className="sr-only" aria-live="polite">
-            総当たりの{milestone}
-          </p>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-[14px] text-ink" aria-hidden="true">
               {progress && progress.total > 0
