@@ -170,7 +170,7 @@ function Statement({
 /** 計算書の下の「比べると」:同じ期間・同じ費用の買い持ち(docs/benchmark.md)。 */
 function BenchmarkLine({ result }: { result: BacktestResult }) {
   const b = result.benchmark;
-  const unavailable = benchmarkUnavailable(b, result.params.lot_size);
+  const unavailable = benchmarkUnavailable(b, result.params.lot_size, result.params.fee_rate);
   return (
     <div className="mt-4 rounded-md bg-surface-2 px-3 py-2.5 text-[14px]">
       {unavailable ? (
@@ -188,7 +188,8 @@ function BenchmarkLine({ result }: { result: BacktestResult }) {
           </div>
           <p className="mt-1 text-[13px] text-ink-2">
             この売買ルールの総リターンは、<b className="text-ink">{returnGap(result.metrics.total_return, b.metrics.total_return)}</b>
-            でした(同じ手数料・スリッページ。配当は含めません)。
+            でした(同じ手数料・スリッページ。配当は含めないので、買い持ちは実際より少し不利です。
+            買い持ちの最後の日は売らずに評価しています)。
           </p>
         </>
       )}
@@ -224,7 +225,9 @@ function Metrics({ result }: { result: BacktestResult }) {
         </>
       ),
       help: `1年(${result.params.trading_days_per_year}営業日)あたりに直した値`,
-      benchmark: bm && formatPercent(bm.annualized_return, { signed: true }),
+      // 期間は売買ルールと同じなので、参考値かどうかも同じ
+      benchmark:
+        bm && `${formatPercent(bm.annualized_return, { signed: true })}${reference && bm.annualized_return !== null ? "(参考値)" : ""}`,
     },
     {
       label: "最大ドローダウン",
@@ -292,6 +295,7 @@ function Metrics({ result }: { result: BacktestResult }) {
 
 function DailyTable({ result }: { result: BacktestResult }) {
   const [open, setOpen] = useState(false);
+  const bought = result.benchmark.status === "bought";
   return (
     <div className="mt-4 border-t border-rule pt-3">
       <button
@@ -308,7 +312,18 @@ function DailyTable({ result }: { result: BacktestResult }) {
             <caption className="sr-only">日々の数値</caption>
             <thead className="sticky top-0 bg-surface-2 text-ink-2">
               <tr>
-                {["日付", "終値", "短期線", "長期線", "株数", "現金", "資産額", "ドローダウン", "買い持ちの資産額"].map((h) => (
+                {[
+                  "日付",
+                  "終値",
+                  "短期線",
+                  "長期線",
+                  "株数",
+                  "現金",
+                  "資産額",
+                  "ドローダウン",
+                  // 買い持ちを買えなかったときは、比べないので列を出さない(チャート・成績表と同じ)
+                  ...(bought ? ["買い持ちの資産額"] : []),
+                ].map((h) => (
                   <th key={h} scope="col" className="px-3 py-2 text-right font-normal first:text-left">
                     {h}
                   </th>
@@ -326,7 +341,7 @@ function DailyTable({ result }: { result: BacktestResult }) {
                   <td className="px-3 py-1.5 text-right">{formatYen(d.cash)}</td>
                   <td className="px-3 py-1.5 text-right">{formatYen(d.equity)}</td>
                   <td className="px-3 py-1.5 text-right">{formatPercent(d.drawdown, { digits: 1 })}</td>
-                  <td className="px-3 py-1.5 text-right text-ink-2">{formatYen(d.benchmark_equity)}</td>
+                  {bought && <td className="px-3 py-1.5 text-right text-ink-2">{formatYen(d.benchmark_equity)}</td>}
                 </tr>
               ))}
             </tbody>

@@ -192,6 +192,90 @@ def valuation_price(bars: Sequence[Bar], index: int) -> float:
     return close_u * factor
 
 
+@dataclass(frozen=True)
+class SplitOutcome:
+    """2.8 分割・併合の処理の結果。"""
+
+    shares: int  # 処理したあとの株数
+    fraction_cash: float  # 端数を現金に換えた額(端数がなければ 0.0)
+    event: CorporateActionEvent
+
+
+def apply_split_or_merger(bars: Sequence[Bar], t: int, shares: int) -> SplitOutcome:
+    """2.8 t の日(分割・併合の権利落ち日)に、持ち株 shares(> 0)の株数を変える。
+
+    移動平均クロス(run_backtest)と買い持ち(benchmark.py)の両方がこの関数を使う。
+    """
+    bar = bars[t]
+    assert bar.adj_factor is not None and shares > 0
+    p, q = recover_split_ratio(bar.adj_factor)
+    scaled = check_int64(shares * p, "株数")  # C++ では掛け算の前に桁あふれを確かめる
+    new_shares = scaled // q  # 整数の掛け算と割り算
+    remainder = scaled % q
+    fraction_shares = remainder / q
+    fraction_cash = fraction_shares * valuation_price(bars, t) if remainder else 0.0
+    event = CorporateActionEvent(
+        date=bar.date,
+        ex_rt=bar.ex_rt,  # type: ignore[arg-type]
+        adj_factor=bar.adj_factor,
+        ratio_numerator=p,
+        ratio_denominator=q,
+        shares_before=shares,
+        shares_after=new_shares,
+        fraction_shares=fraction_shares,
+        fraction_cash=fraction_cash,
+        closed_position=new_shares == 0,
+    )
+    return SplitOutcome(new_shares, fraction_cash, event)
+
+
+@dataclass(frozen=True)
+class BuyOutcome:
+    """2.6・2.7 買いの約定の結果。fill と skipped のどちらか一方が入る。"""
+
+    shares: int  # 買った株数(資金不足なら0)
+    buy_cost: float  # 現金から引く額(資金不足なら0.0)
+    fill: Fill | None
+    skipped: SkippedOrder | None
+
+
+def fill_buy(bar: Bar, signal_date: dt.date, cash: float, params: MaCrossParams) -> BuyOutcome:
+    """2.6・2.7 bar の始値(Null でない)で、現金 cash で買えるだけ買う。
+
+    移動平均クロス(run_backtest)と買い持ち(benchmark.py)の両方がこの関数を使う。
+    """
+    assert bar.open is not None
+    fill_price = bar.open * (1 + params.slippage_rate)
+    buy_shares, unit_cost = decide_buy_shares(cash, fill_price, params.fee_rate, params.lot_size)
+    if buy_shares == 0:
+        skipped = SkippedOrder(
+            date=bar.date,
+            signal_date=signal_date,
+            open_price=bar.open,
+            fill_price=fill_price,
+            cash=cash,
+        )
+        return BuyOutcome(0, 0.0, None, skipped)
+    notional = fill_price * buy_shares
+    fee = notional * params.fee_rate
+    buy_cost = unit_cost * buy_shares
+    cash_after = cash - buy_cost
+    if cash_after < 0:
+        raise AssertionError("買った後の現金が負になりました(実装のバグ)")
+    fill = Fill(
+        date=bar.date,
+        signal_date=signal_date,
+        side="buy",
+        open_price=bar.open,
+        fill_price=fill_price,
+        shares=buy_shares,
+        notional=notional,
+        fee=fee,
+        cash_after=cash_after,
+    )
+    return BuyOutcome(buy_shares, buy_cost, fill, None)
+
+
 @dataclass
 class _OpenTrade:
     entry_date: dt.date
@@ -288,32 +372,13 @@ def run_backtest(
 
         # 手順1:分割・併合の処理(2.8)
         if is_split_or_merger(bar) and shares > 0:
-            assert open_trade is not None and bar.adj_factor is not None
-            p, q = recover_split_ratio(bar.adj_factor)
-            scaled = check_int64(shares * p, "株数")  # C++ では掛け算の前に桁あふれを確かめる
-            new_shares = scaled // q  # 整数の掛け算と割り算
-            remainder = scaled % q
-            fraction_shares = remainder / q
-            fraction_cash = fraction_shares * valuation_price(loaded, t) if remainder else 0.0
-            cash = cash + fraction_cash
-            open_trade.fraction_cash = open_trade.fraction_cash + fraction_cash
-            closed = new_shares == 0
-            events.append(
-                CorporateActionEvent(
-                    date=bar.date,
-                    ex_rt=bar.ex_rt,
-                    adj_factor=bar.adj_factor,
-                    ratio_numerator=p,
-                    ratio_denominator=q,
-                    shares_before=shares,
-                    shares_after=new_shares,
-                    fraction_shares=fraction_shares,
-                    fraction_cash=fraction_cash,
-                    closed_position=closed,
-                )
-            )
-            shares = new_shares
-            if closed:
+            assert open_trade is not None
+            split = apply_split_or_merger(loaded, t, shares)
+            cash = cash + split.fraction_cash
+            open_trade.fraction_cash = open_trade.fraction_cash + split.fraction_cash
+            events.append(split.event)
+            shares = split.shares
+            if shares == 0:
                 # 併合で0株になったら、その日に決済したものとして扱う
                 trades.append(
                     open_trade.close(
@@ -331,42 +396,17 @@ def run_backtest(
         # 手順2:約定(2.6)。始値が Null なら次の有効日に繰り越す
         if pending is not None and bar.open is not None:
             if pending.side == "buy":
-                fill_price = bar.open * (1 + params.slippage_rate)
-                buy_shares, unit_cost = decide_buy_shares(
-                    cash, fill_price, params.fee_rate, params.lot_size
-                )
-                if buy_shares == 0:
-                    skipped.append(
-                        SkippedOrder(
-                            date=bar.date,
-                            signal_date=pending.signal_date,
-                            open_price=bar.open,
-                            fill_price=fill_price,
-                            cash=cash,
-                        )
-                    )
+                bought = fill_buy(bar, pending.signal_date, cash, params)
+                if bought.fill is None:
+                    assert bought.skipped is not None
+                    skipped.append(bought.skipped)
                 else:
-                    notional = fill_price * buy_shares
-                    fee = notional * params.fee_rate
-                    buy_cost = unit_cost * buy_shares
-                    cash = cash - buy_cost
-                    if cash < 0:
-                        raise AssertionError("買った後の現金が負になりました(実装のバグ)")
-                    shares = buy_shares
-                    open_trade = _OpenTrade(bar.date, fill_price, buy_shares, buy_cost)
-                    fills.append(
-                        Fill(
-                            date=bar.date,
-                            signal_date=pending.signal_date,
-                            side="buy",
-                            open_price=bar.open,
-                            fill_price=fill_price,
-                            shares=buy_shares,
-                            notional=notional,
-                            fee=fee,
-                            cash_after=cash,
-                        )
+                    cash = bought.fill.cash_after
+                    shares = bought.shares
+                    open_trade = _OpenTrade(
+                        bar.date, bought.fill.fill_price, bought.shares, bought.buy_cost
                     )
+                    fills.append(bought.fill)
             else:
                 assert open_trade is not None and shares > 0
                 fill_price = bar.open * (1 - params.slippage_rate)

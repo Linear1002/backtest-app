@@ -7,11 +7,17 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from backend.api.convert import NOTE_MESSAGES, benchmark_metrics_out, data_info_out
+from backend.api.convert import (
+    NOTE_MESSAGES,
+    benchmark_metrics_out,
+    benchmark_status,
+    data_info_out,
+)
 from backend.api.schemas import (
     ComboOut,
     NoteOut,
     RankingOut,
+    SegmentBenchmarkOut,
     SegmentOut,
     SweepEngineOut,
     SweepGridOut,
@@ -82,7 +88,11 @@ def segments_out(
                 first_business_day=days[0],
                 last_business_day=days[-1],
                 business_days=len(days),
-                benchmark=benchmark_metrics_out(benchmark),
+                benchmark=SegmentBenchmarkOut(
+                    **benchmark_metrics_out(benchmark).model_dump(),
+                    status=benchmark_status(benchmark),  # type: ignore[arg-type]
+                    open_position_at_end=benchmark.open_position_at_end,
+                ),
             )
         )
     return tuple(out)
@@ -210,7 +220,8 @@ def notes_out(context: SweepContext, count: int) -> list[NoteOut]:
             message=(
                 "買い持ちは、それぞれの期間の最初に売買が成立した日の終値で買うと決め、次に売買が成立した日の始値で"
                 "買えるだけ買って、その期間の最後まで持った場合です(手数料・スリッページ・分割の扱いは同じ)。"
-                "配当を含めないので、ずっと株を持つ買い持ちのほうが、実際より不利に出ます"
+                "配当を含めないので、ずっと株を持つ買い持ちのほうが、実際より不利に出ます。"
+                "買い持ちの最後の日は売らずに評価します(清算コスト控除前)。資金不足などで買えなかった期間は、比べません"
             ),
         )
     )
@@ -239,7 +250,12 @@ def result_out(
         for i, (short, long) in enumerate(pairs)
     ]
     rankings = []
-    by_name = {segment.name: segment.benchmark for segment in context.segments}
+    # 買えなかった期間の買い持ちとは比べない(値は初期資金のままで、現金と比べることになるため。docs/sweep.md 7章)
+    by_name = {
+        segment.name: segment.benchmark
+        for segment in context.segments
+        if segment.benchmark.status == "bought"
+    }
     for objective in OBJECTIVES:
         benchmark = (
             objective_value(by_name.get(IN_SAMPLE), objective),

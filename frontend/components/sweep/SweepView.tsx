@@ -7,7 +7,7 @@
 import { memo, useCallback, useId, useMemo, useState } from "react";
 
 import type { BenchmarkMetrics, Objective, SegmentName, SweepCombo, SweepMetrics, SweepResult, SweepSegment } from "@/lib/api.ts";
-import { beatsText, benchmarkValue, versusBenchmark } from "@/lib/benchmark.ts";
+import { beatsText, benchmarkValue, segmentBenchmarkUnavailable, versusText } from "@/lib/benchmark.ts";
 import type { SweepRecord, SweepViewState } from "@/lib/flow.ts";
 import { direction, formatDate, formatDateTimeJst, formatNumber, formatPercent, formatRatePct, formatYen } from "@/lib/format.ts";
 import {
@@ -301,7 +301,9 @@ function Summary({
           {segments.map((s) => (
             <span key={s.name} className="block text-[15px] font-normal text-ink-2">
               {hasHoldout ? `${s.name === "in_sample" ? "選ぶ期間" : "検証期間"} ` : ""}
-              <b className="text-[18px] text-ink">{formatObjective(benchmarkValue(s.benchmark, objective), objective)}</b>
+              <b className="text-[18px] text-ink">
+                {segmentBenchmarkUnavailable(s.benchmark.status) ?? formatObjective(benchmarkValue(s.benchmark, objective), objective)}
+              </b>
             </span>
           ))}
         </Row>
@@ -317,10 +319,12 @@ function Summary({
             .filter((name) => name === "in_sample" || hasHoldout)
             .map((name) => {
               const text = beatsText(ranking[`${name}_beats_benchmark`], name === "in_sample" ? ranking.in_sample_ranked : ranking.out_of_sample_ranked);
+              const status = segments.find((s) => s.name === name)?.benchmark.status ?? "bought";
+              const missing = status === "bought" ? "−(買い持ちの値が算出不可)" : "−(買い持ちを買えなかったので比べない)";
               return (
                 <span key={name} className="block text-[15px] font-normal text-ink-2">
                   {hasHoldout ? `${name === "in_sample" ? "選ぶ期間" : "検証期間"} ` : ""}
-                  <b className="text-[18px] text-ink">{text ?? "−(買い持ちの値が算出不可)"}</b>
+                  <b className="text-[18px] text-ink">{text ?? missing}</b>
                 </span>
               );
             })}
@@ -343,15 +347,11 @@ function Summary({
   );
 }
 
-/** 「買い持ち(1.25)より悪い」。比べられないときは何も出さない。 */
+/** 「同じ期間の買い持ち(1.25)より悪い」。比べられないときは何も出さない(文は lib/benchmark.ts の versusText)。 */
 function BenchmarkVersus({ value, benchmark, objective }: { value: number | null; benchmark: number | null; objective: Objective }) {
-  const verdict = versusBenchmark(value, benchmark, objective);
-  if (verdict === null) return null;
-  return (
-    <span className="block text-[13px] font-normal text-ink-2">
-      同じ期間の買い持ち({formatObjective(benchmark, objective)})より{verdict === "同じ" ? "と同じ" : verdict}
-    </span>
-  );
+  const text = versusText(value, benchmark, objective, formatObjective(benchmark, objective));
+  if (text === null) return null;
+  return <span className="block text-[13px] font-normal text-ink-2">{text}</span>;
 }
 
 function Row({ label, help, children }: { label: string; help: string; children: React.ReactNode }) {
@@ -463,6 +463,7 @@ function ComboDetail({
               </th>
               <th scope="col" className="px-3 py-2 text-right font-normal text-ink-3">
                 買い持ち<span className="sr-only">(選ぶ期間)</span>
+                {inSample.benchmark.status !== "bought" && <span className="block text-[11px]">買えず</span>}
               </th>
               {combo.out_of_sample && (
                 <>
@@ -471,6 +472,7 @@ function ComboDetail({
                   </th>
                   <th scope="col" className="py-2 pl-3 text-right font-normal text-ink-3">
                     買い持ち<span className="sr-only">(検証期間)</span>
+                    {outOfSample?.benchmark.status !== "bought" && <span className="block text-[11px]">買えず</span>}
                   </th>
                 </>
               )}
@@ -483,12 +485,12 @@ function ComboDetail({
                   {row.label}
                 </th>
                 <td className="px-3 py-2 text-right text-ink">{row.render(combo.in_sample, days, inSample)}</td>
-                <td className="px-3 py-2 text-right text-ink-3">{row.benchmark ? row.benchmark(inSample.benchmark, days) : "−"}</td>
+                <td className="px-3 py-2 text-right text-ink-3">{row.benchmark && inSample.benchmark.status === "bought" ? row.benchmark(inSample.benchmark, days) : "−"}</td>
                 {combo.out_of_sample && outOfSample && (
                   <>
                     <td className="px-3 py-2 text-right text-ink">{row.render(combo.out_of_sample, days, outOfSample)}</td>
                     <td className="py-2 pl-3 text-right text-ink-3">
-                      {row.benchmark ? row.benchmark(outOfSample.benchmark, days) : "−"}
+                      {row.benchmark && outOfSample.benchmark.status === "bought" ? row.benchmark(outOfSample.benchmark, days) : "−"}
                     </td>
                   </>
                 )}

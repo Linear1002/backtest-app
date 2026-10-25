@@ -139,3 +139,74 @@ def test_sweep_segments_have_buy_and_hold_and_beat_counts(client: TestClient) ->
             )
             assert ranking[f"{segment}_beats_benchmark"] == expected, (objective, segment)
     assert "benchmark" in [n["kind"] for n in result["notes"]]
+    assert all(segment["benchmark"]["status"] == "bought" for segment in result["segments"])
+
+
+def test_sweep_does_not_compare_with_buy_and_hold_that_could_not_buy(client: TestClient) -> None:
+    """買い持ちが資金不足で買えなかった期間は、比べない(値は初期資金のまま。現金と比べることになるため)。"""
+    request = {
+        "symbol_id": "DEMO:1003",
+        "holdout_start_date": "2025-08-01",
+        "grid": {
+            "short_min": 3,
+            "short_max": 6,
+            "short_step": 3,
+            "long_min": 15,
+            "long_max": 25,
+            "long_step": 10,
+        },
+        # DEMO:1003 は1株数千円なので、10万円では100株を買えない
+        "params": {**PARAMS, "initial_cash": 100_000},
+    }
+    status = wait_done(client, client.post("/api/sweeps", json=request).json()["id"])
+    result = status["result"]
+    assert [s["benchmark"]["status"] for s in result["segments"]] == ["insufficient_cash"] * 2
+    for ranking in result["rankings"]:
+        assert ranking["in_sample_beats_benchmark"] is None
+        assert ranking["out_of_sample_beats_benchmark"] is None
+
+
+def test_beats_counts_ignore_missing_values_and_ties() -> None:
+    """同じ値は「良い」に数えない。算出不可(None)の組み合わせも数えない。"""
+    from backend.sweep_summary import beats
+
+    assert beats([1.0, 2.0, 2.0, None, 3.0], 2.0, "sharpe_ratio") == 1
+    assert beats([0.1, 0.2, 0.2, None], 0.2, "max_drawdown") == 1  # 小さいほど良い
+    assert beats([1.0, None], None, "sharpe_ratio") is None
+
+
+def test_anomaly_only_in_the_warmup_is_reported_by_the_strategy(tmp_path) -> None:
+    """ウォームアップの範囲だけにある異常は、移動平均クロスのデータの異常として返る(買い持ちは期間だけを読むので、
+    それより先に移動平均クロスが確かめる。docs/benchmark.md 2章の6)。"""
+    import dataclasses
+
+    from backend.marketdata.service import MarketDataService
+
+    class BrokenDemo(DemoDataSource):
+        def get_daily_bars(self, symbol_id, start=None, end=None):
+            bars = super().get_daily_bars(symbol_id, start, end)
+            return [
+                dataclasses.replace(b, adj_factor=None) if b.date == dt.date(2022, 10, 20) else b
+                for b in bars
+            ]
+
+    jobs = SweepJobs(2, executor_factory=lambda n: ThreadPoolExecutor(max_workers=n))
+    client = TestClient(
+        create_app(
+            Settings(data_dir=tmp_path), service=MarketDataService([BrokenDemo()]), sweeps=jobs
+        )
+    )
+    request = {
+        "symbol_id": "DEMO:1001",
+        "start_date": "2023-01-04",
+        "end_date": "2024-12-30",
+        "params": {**PARAMS, "short_window": 5, "long_window": 60},
+    }
+    response = client.post("/api/backtests", json=request)
+    assert response.status_code == 422
+    assert "2022-10-20" in response.json()["detail"]
+    # 長期20日なら、その日はウォームアップの範囲に入らないので、移動平均クロスも買い持ちも計算できる
+    ok = client.post(
+        "/api/backtests", json={**request, "params": {**request["params"], "long_window": 20}}
+    )
+    assert ok.status_code == 200 and ok.json()["benchmark"]["status"] == "bought"

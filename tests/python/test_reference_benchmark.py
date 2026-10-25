@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import datetime as dt
 import json
 from pathlib import Path
 
@@ -75,6 +76,23 @@ def test_merger_to_zero_keeps_cash_and_does_not_buy_again() -> None:
     assert [d.shares for d in result.daily] == [0, 5, 0, 0, 0]
     assert result.daily[-1].equity == result.daily[2].equity  # 現金だけ
     assert not result.open_position_at_end
+
+
+def test_ex_dates_on_the_signal_day_and_the_fill_day_do_not_adjust() -> None:
+    """権利落ち日が「買うと決めた日」や「約定日」と重なっても、株数は変えない。
+
+    1日の処理は 分割・併合 → 約定 の順(docs/mvp.md 2.5)。約定日の手順1ではまだ株を持っていないので、
+    買った株数は権利落ち後の始値で決まり、その日に調整しない。
+    """
+    on_fill = make_bars([100, 50, 51, 52], opens=[100, 50, 51, 52], adj={1: 0.5}, ex={1: 1})
+    result = run(on_fill)
+    assert result.fill is not None and result.fill.date == on_fill[1].date
+    assert result.fill.shares == 2000  # 100,000円 ÷ 50円 = 2,000株(調整しない)
+    assert result.events == ()
+    assert [d.shares for d in result.daily] == [0, 2000, 2000, 2000]
+    on_signal = make_bars([100, 101, 102, 103], opens=[100, 101, 102, 103], adj={0: 0.5}, ex={0: 1})
+    result = run(on_signal)
+    assert result.events == () and result.fill is not None and result.fill.shares == 900
 
 
 def test_first_days_halted() -> None:
@@ -156,21 +174,46 @@ def single_buy_runs():
     return [r for r in runs if len(r[2].fills) == 1 and r[2].fills[0].side == "buy"]
 
 
+MUST_CHECK = {
+    "h07_split_while_holding",  # 分割
+    "h08_repeated_splits_fraction",  # 端数の出る分割を3回
+    "h09_merger_to_zero_cancels_sell",  # 併合で0株
+    "h11_halted_ex_date_while_holding",  # 売買不成立の日が権利落ち日
+    "h18_zero_pnl_merger_on_halted_day",  # 売買不成立の日の併合で0株
+}
+
+
+def assert_same_from(benchmark, strategy, start, name) -> None:
+    """start 以降の日ごとの資産額・株数・現金と、買いの約定が、移動平均クロスとビット単位で同じ。"""
+    days = [day for day in strategy.daily if day.date >= start]
+    assert [d.date for d in benchmark.daily] == [d.date for d in days], name
+    assert [d.equity for d in benchmark.daily] == [d.equity for d in days], name
+    assert [d.shares for d in benchmark.daily] == [d.shares for d in days], name
+    assert [d.cash for d in benchmark.daily] == [d.cash for d in days], name
+    assert benchmark.fill == strategy.fills[0], name
+    assert benchmark.events == strategy.events, name
+
+
 def test_equals_the_strategy_when_it_buys_once_and_holds() -> None:
     """買いのシグナルの日を開始日にした買い持ちは、その日からの資産額が移動平均クロスと完全に同じになる。
 
-    同じ日に、同じ現金で、同じ始値で買い、同じ分割・併合の処理を通るため。分割・端数の出る併合・併合で0株・
-    売買不成立の権利落ち日を含む正解データのケースでも、ビット単位で一致する。
+    同じ日に、同じ現金で、同じ始値で買い、同じ分割・併合の処理を通るため(同じ関数 fill_buy・apply_split_or_merger)。
+    開始日を「シグナルの前の有効日の翌日」(休場日のこともある)にずらしても同じ。その間、移動平均クロスは株も注文も持たないため。
     """
     checked = []
     for name, bars, strategy, p in single_buy_runs():
         signal = strategy.fills[0].signal_date
         if sum(1 for bar in bars if signal <= bar.date <= strategy.end) < 3:
             continue  # 買い持ちの期間が3営業日未満になる(期間の最後のほうで買ったケース)
-        benchmark = run_buy_and_hold(bars, signal, strategy.end, p)
-        expected = [day.equity for day in strategy.daily if day.date >= signal]
-        assert [day.equity for day in benchmark.daily] == expected, name
-        assert len(benchmark.events) == len(strategy.events), name
-        checked.append((name, len(benchmark.events)))
+        assert_same_from(run_buy_and_hold(bars, signal, strategy.end, p), strategy, signal, name)
+        before = [bar.date for bar in bars if bar.date < signal and bar.is_valid]
+        shifted = before[-1] + dt.timedelta(days=1) if before else signal
+        if shifted >= strategy.start:
+            assert_same_from(
+                run_buy_and_hold(bars, shifted, strategy.end, p), strategy, shifted, name
+            )
+        checked.append(name)
     assert len(checked) >= 20
-    assert sum(1 for _, events in checked if events > 0) >= 5  # 分割・併合をはさむケースも確かめた
+    assert MUST_CHECK <= set(
+        checked
+    )  # 分割・併合・売買不成立の権利落ち日をはさむケースを必ず確かめる

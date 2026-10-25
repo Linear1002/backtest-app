@@ -54,8 +54,10 @@ test("銘柄を選んで結果まで進め、分割をまたいだ取引も正�
   await expect(page.getByRole("heading", { name: "分割・併合の処理" })).toBeVisible();
   await expect(page.getByText(/架空データです/)).toBeVisible();
   // 比較の基準:同じ期間・同じ費用の買い持ち(docs/benchmark.md)。DEMO:1003 は買い持ちのほうが良かった
-  await expect(page.getByText("比べると:同じ期間の買い持ちなら")).toBeVisible();
-  await expect(page.getByText("2,779,717円", { exact: true })).toBeVisible();
+  const compare = page.getByText("比べると:同じ期間の買い持ちなら");
+  await expect(compare).toBeVisible();
+  // 計算書の行の中で確かめる(同じ金額がチャートの読み取り欄にも出るため)
+  await expect(compare.locator("xpath=..")).toContainText("2,779,717円(+177.97%)");
   await expect(page.getByText("買い持ちより 98.9ポイント下")).toBeVisible();
   // 成績表にも買い持ちの値(最大ドローダウンは買い持ちのほうが大きい)
   const metricsTable = page.getByRole("region", { name: "成績表" });
