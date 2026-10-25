@@ -245,6 +245,12 @@ class NoteOut(_Model):
         "aligned_start",
         "sampling_error",
         "benchmark",
+        "walkforward_trials",
+        "walkforward_stitching",
+        "walkforward_liquidation",
+        "walkforward_unused",
+        "walkforward_ties",
+        "walkforward_no_choice",
     ]
     message: str
 
@@ -543,4 +549,126 @@ class SweepStatusOut(_Model):
     total: int = Field(description="組み合わせの数")
     elapsed_ms: float | None = Field(description="計算にかかった時間(終わったときだけ)")
     result: SweepResultOut | None = None
+    error: ErrorResponse | None = None
+
+
+# --- ウォークフォワード分析(docs/walkforward.md) -------------------------------------------
+
+
+class WalkForwardRequest(_Model):
+    symbol_id: str = Field(examples=["DEMO:1003"], max_length=32)
+    strategy_id: str = Field("ma_cross", max_length=64)
+    engine: str = Field(
+        "python",
+        description="選ぶ期間の総当たりに使うエンジン(GET /api/meta の sweep_engines)",
+        max_length=32,
+    )
+    start_date: dt.date | None = Field(None, description="省略するとデータの最初の日")
+    end_date: dt.date | None = Field(None, description="省略するとデータの最後の日")
+    grid: SweepGridIn = SweepGridIn()
+    params: SweepCostsIn = SweepCostsIn()
+    objective: str = Field(
+        "sharpe_ratio",
+        description="1位を選ぶ基準:sharpe_ratio(シャープレシオ)か total_return(総リターン)",
+        max_length=32,
+    )
+    in_sample_months: float = Field(
+        24, description="選ぶ期間の長さ(か月。1〜120の整数)", allow_inf_nan=False
+    )
+    out_of_sample_months: float = Field(
+        6, description="使う期間の長さ(か月。1〜60の整数)", allow_inf_nan=False
+    )
+
+
+class WalkForwardPeriodOut(_Model):
+    start_date: dt.date
+    end_date: dt.date
+    first_business_day: dt.date
+    last_business_day: dt.date
+    business_days: int
+
+
+class WindowChoiceOut(_Model):
+    short_window: int
+    long_window: int
+
+
+class WalkForwardWindowOut(_Model):
+    index: int = Field(description="区切りの番号(1から)")
+    requested_in_sample_start: dt.date = Field(
+        description="暦で決めた選ぶ期間の始まり(始まりをそろえる前。docs/walkforward.md 3章)"
+    )
+    in_sample: WalkForwardPeriodOut = Field(description="選ぶ期間(始まりをそろえたあと)")
+    out_of_sample: WalkForwardPeriodOut = Field(description="使う期間")
+    chosen: WindowChoiceOut | None = Field(
+        description="選んだ組み合わせ。すべて算出不可で選ばなかったときは null(その使う期間は現金のまま)"
+    )
+    in_sample_value: float | None = Field(description="選んだ組み合わせの、選ぶ期間の基準の値")
+    tie_count: int = Field(description="1位と同じ値だった組み合わせの数(1なら同率なし)")
+    starting_cash: float = Field(description="この使う期間の初期資金(前の区切りの清算したあとの額)")
+    out_of_sample_metrics: SweepMetricsOut
+    ended_with_shares: bool
+    final_equity: float = Field(description="使う期間の最後の資産(清算する前)")
+    liquidated_equity: float = Field(description="清算したあとの額(docs/walkforward.md 5章)")
+    benchmark_total_return: float | None = Field(
+        description="この使う期間だけの買い持ちの総リターン。買い持ちを買えなかったときは null(比べない)"
+    )
+
+
+class WalkForwardDayOut(_Model):
+    date: dt.date
+    equity: float = Field(description="つないだ資産額(区切りの最終日は清算したあとの額)")
+    benchmark_equity: float = Field(description="つないだ期間全体の買い持ちの資産額")
+
+
+class WalkForwardMetricsOut(_Model):
+    total_return: float
+    annualized_return: float | None
+    max_drawdown: float
+    sharpe_ratio: float | None
+    return_count: int
+    final_equity: float = Field(description="最後の資産(清算する前)")
+    liquidated_equity: float = Field(description="最後の区切りの最終日に清算したあとの額")
+
+
+class UnusedDaysOut(_Model):
+    """最後の区切りの使う期間のあとに残り、使わなかった日(docs/walkforward.md 3章)。"""
+
+    start_date: dt.date
+    end_date: dt.date
+    business_days: int
+
+
+class WalkForwardResultOut(_Model):
+    symbol: SymbolOut
+    strategy_id: str
+    engine: SweepEngineOut
+    grid: SweepGridOut
+    params: SweepParamsOut
+    objective: Literal["sharpe_ratio", "total_return"]
+    in_sample_months: int
+    out_of_sample_months: int
+    count: int = Field(description="試した組み合わせの数(格子)")
+    runs: int = Field(description="計算した回数(組み合わせの数 × 区切りの数 + 区切りの数)")
+    windows: list[WalkForwardWindowOut]
+    daily: list[WalkForwardDayOut]
+    metrics: WalkForwardMetricsOut
+    benchmark: BenchmarkOut = Field(description="つないだ期間全体の買い持ち")
+    choice_changes: int = Field(description="選んだ組み合わせが、前の区切りから変わった回数")
+    compared_windows: int = Field(description="買い持ちと比べた区切りの数(買い持ちを買えた区切り)")
+    beats_benchmark: int = Field(description="そのうち、使う期間で買い持ちを上回った区切りの数")
+    unused: UnusedDaysOut | None
+    notes: list[NoteOut]
+    data_info: DataInfoOut
+
+
+class WalkForwardStatusOut(_Model):
+    id: str
+    status: Literal["running", "done", "failed", "cancelled"]
+    done: int = Field(
+        description="計算が終わった組み合わせの数(すべての区切りの選ぶ期間を計算して1つ)"
+    )
+    total: int = Field(description="組み合わせの数")
+    elapsed_ms: float | None = Field(description="計算にかかった時間(終わったときだけ)")
+    result: WalkForwardResultOut | None = None
     error: ErrorResponse | None = None

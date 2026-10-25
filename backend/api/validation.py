@@ -156,11 +156,17 @@ COST_KEYS = ("fee_rate_pct", "slippage_rate_pct", "initial_cash")
 
 
 def validate_sweep_inputs(
-    grid_in: SweepGridIn, costs_in: SweepCostsIn, market: MarketConfig, max_pairs: int
+    grid_in: SweepGridIn,
+    costs_in: SweepCostsIn,
+    market: MarketConfig,
+    max_pairs: int | None,
+    extra: list[ErrorItem] | None = None,
 ) -> tuple[SweepGrid, SweepCosts]:
     """格子と費用・資金のチェック。誤りはまとめて返す(欄ごと)。組み合わせの数の上限もここで確かめる。
 
     組み合わせがない・多すぎるときは、どの欄の誤りとも言えないので field="grid" にする。
+    max_pairs が None なら上限は確かめない(ウォークフォワード分析は、区切りの数が決まってから計算の量で確かめる)。
+    extra はほかの欄の誤り(ウォークフォワードの設定など)。まとめて返すために一緒に渡す。
     """
     errors: list[ErrorItem] = []
     for key in GRID_FIELDS:
@@ -189,7 +195,7 @@ def validate_sweep_inputs(
                     message="短期の日数が長期の日数より小さい組み合わせがありません。範囲を見直してください",
                 )
             )
-        elif count > max_pairs:
+        elif max_pairs is not None and count > max_pairs:
             errors.append(
                 ErrorItem(
                     field="grid",
@@ -204,6 +210,7 @@ def validate_sweep_inputs(
             message = check_param(spec, getattr(costs_in, spec.key))
             if message:
                 errors.append(ErrorItem(field=spec.key, message=message))
+    errors.extend(extra or [])
     if errors:
         raise InputValidationError(errors)
     assert grid is not None
@@ -253,3 +260,54 @@ def validate_holdout(
             ]
         )
     return holdout
+
+
+# --- ウォークフォワード分析(docs/walkforward.md 7章) --------------------------------------
+
+WALKFORWARD_OBJECTIVES = ("sharpe_ratio", "total_return")
+MAX_IN_SAMPLE_MONTHS = 120
+MAX_OUT_OF_SAMPLE_MONTHS = 60
+
+
+def walkforward_settings_errors(
+    objective: str, in_sample_months: float, out_of_sample_months: float
+) -> list[ErrorItem]:
+    """1位を選ぶ基準・選ぶ期間の長さ・使う期間の長さの誤り(欄ごと)。画面(lib/walkforward.ts)と同じ文。"""
+    errors = []
+    if objective not in WALKFORWARD_OBJECTIVES:
+        errors.append(
+            ErrorItem(
+                field="objective",
+                message="1位を選ぶ基準は、シャープレシオか総リターンを選んでください",
+            )
+        )
+    for field, value, maximum, label in (
+        ("in_sample_months", in_sample_months, MAX_IN_SAMPLE_MONTHS, "選ぶ期間"),
+        ("out_of_sample_months", out_of_sample_months, MAX_OUT_OF_SAMPLE_MONTHS, "使う期間"),
+    ):
+        if not _is_whole(value) or not 1 <= value <= maximum:
+            errors.append(
+                ErrorItem(
+                    field=field,
+                    message=f"{label}の長さは1〜{maximum}か月の整数で入力してください",
+                )
+            )
+    return errors
+
+
+def check_walkforward_runs(pairs: int, windows: int, max_runs: int) -> None:
+    """計算の量(組み合わせの数 × 区切りの数)の上限(docs/walkforward.md 9章)。"""
+    runs = pairs * windows
+    if runs > max_runs:
+        raise InputValidationError(
+            [
+                ErrorItem(
+                    field="grid",
+                    message=(
+                        f"計算が多すぎます({pairs:,}通り × 区切り{windows:,}回 = {runs:,}回)。"
+                        f"このエンジンでは{max_runs:,}回までです。"
+                        "範囲を狭める・刻みを大きくする・使う期間を長くする、のどれかをしてください"
+                    ),
+                )
+            ]
+        )

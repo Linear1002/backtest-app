@@ -310,8 +310,11 @@ def test_counts_of_changes_and_beats(demo1003) -> None:
     result = run_walkforward(demo1003, start, end, GRID, COSTS, SETTINGS)
     pairs = [w.choice.pair for w in result.windows]
     assert result.choice_changes == sum(1 for a, b in zip(pairs, pairs[1:], strict=False) if a != b)
+    assert result.compared_windows == sum(1 for w in result.windows if w.benchmark_bought)
     assert result.beats_benchmark == sum(
-        1 for w in result.windows if w.out_of_sample.total_return > w.benchmark_total_return
+        1
+        for w in result.windows
+        if w.benchmark_bought and w.out_of_sample.total_return > w.benchmark_total_return
     )
     for w in result.windows:
         out = w.window.out_of_sample

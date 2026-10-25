@@ -22,6 +22,7 @@ from backend.sweeps import (
     chunk_ranges,
 )
 from engine.reference.sweep import SweepCosts, SweepGrid, run_pairs, validate_sweep
+from engine.reference.types import EngineDataError, EngineInputError
 
 COSTS = SweepCosts(fee_rate=0.001, slippage_rate=0.0005, initial_cash=1_000_000.0)
 
@@ -162,3 +163,21 @@ def test_shutdown_while_handing_out_chunks_is_a_cancel_not_a_failure() -> None:
     job = wait_finished(jobs.start(spec()))
     assert job.status == "cancelled"
     assert job.error_kind is None
+
+
+@pytest.mark.parametrize(
+    ("error", "kind"),
+    [
+        (EngineInputError("区切り2の初期資金が、扱える範囲の外になりました"), "input"),
+        (EngineDataError("株数が大きすぎて計算できません"), "data"),
+    ],
+)
+def test_engine_errors_while_building_the_result_keep_their_kind(error, kind) -> None:
+    """計算のあとの build(ウォークフォワードの使う期間の計算など)で気づいた誤りは、種類と文をそのまま返す。"""
+
+    def build(rows):
+        raise error
+
+    job = wait_finished(thread_jobs().start(spec(), build=build))
+    assert job.status == "failed"
+    assert (job.error_kind, job.error_message) == (kind, str(error))

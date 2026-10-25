@@ -1,4 +1,7 @@
-"""総当たりのジョブ(docs/sweep.md 10章)。
+"""総当たりとウォークフォワード分析のジョブ(docs/sweep.md 10章・docs/walkforward.md 10章)。
+
+ウォークフォワード分析も、計算の重いところ(すべての組み合わせを、すべての区切りの選ぶ期間で計算する)は総当たりと同じなので、
+同じ仕組みで動かす。違いは、計算が終わったあとの build(選んで、使う期間を計算して、つなぐ)と、ジョブの種類(kind)だけ。
 
 総当たりは数秒〜数分かかるので、リクエストはすぐに返し、計算は別のスレッドで進める。
 - 組み合わせをいくつかのかたまり(chunk)に分け、CPU のコアの数だけのプロセスで並列に計算する
@@ -41,7 +44,7 @@ from engine.reference.sweep import (
     SweepRow,
     run_pairs,
 )
-from engine.reference.types import Bar
+from engine.reference.types import Bar, EngineDataError, EngineInputError
 
 logger = logging.getLogger("backend.sweeps")
 
@@ -80,6 +83,7 @@ class SweepSpec:
     costs: SweepCosts
     pairs: tuple[tuple[int, int], ...]
     context: Any = None  # 結果を画面の形にするときに使う情報(銘柄など)。ジョブは中身を見ない
+    kind: str = "sweep"  # "sweep"(総当たり)か "walkforward"(ウォークフォワード分析)。API がほかの種類の id を受け付けないため
 
 
 @dataclass
@@ -288,6 +292,13 @@ class SweepJobs:
             rows.extend(outcomes[first].rows)
         try:
             output = build(tuple(rows)) if build is not None else None
+        except EngineInputError as error:
+            # ウォークフォワード分析の使う期間の計算などで気づく誤り(docs/walkforward.md 7章の10)
+            self._finish(job, "failed", error_kind="input", error_message=str(error))
+            return
+        except EngineDataError as error:
+            self._finish(job, "failed", error_kind="data", error_message=str(error))
+            return
         except Exception:
             logger.exception("総当たりの結果をまとめられませんでした(ジョブ %s)", job.id)
             self._finish(job, "failed", error_kind="internal", error_message=INTERNAL_ERROR)

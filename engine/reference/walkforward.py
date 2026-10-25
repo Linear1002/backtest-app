@@ -124,10 +124,19 @@ class WalkForwardResult:
     metrics: StitchedMetrics
     benchmark: BuyAndHoldResult  # つないだ期間全体の買い持ち
     choice_changes: int  # 選んだ組み合わせが、前の区切りから変わった回数
-    beats_benchmark: int  # 使う期間の総リターンが、その期間の買い持ちを上回った区切りの数
+    compared_windows: int  # 買い持ちと比べた区切りの数(その使う期間で買い持ちを買えた区切り)
+    beats_benchmark: int  # そのうち、使う期間の総リターンが買い持ちを上回った区切りの数
 
 
 # --- 区切り方(3章) ------------------------------------------------------------------
+
+
+class WindowError(EngineInputError):
+    """区切りの誤り(7章の5・8)。field は API が誤りを出す入力欄(windows・in_sample_months・out_of_sample_months)。"""
+
+    def __init__(self, message: str, field: str) -> None:
+        super().__init__(message)
+        self.field = field
 
 
 def add_months(day: dt.date, months: int) -> dt.date:
@@ -181,10 +190,11 @@ def _business_days(bars: Sequence[Bar], start: dt.date, end: dt.date) -> int:
     return sum(1 for bar in bars if start <= bar.date <= end)
 
 
-def no_windows_message(settings: WalkForwardSettings) -> str:
-    return (
+def no_windows_error(settings: WalkForwardSettings) -> WindowError:
+    return WindowError(
         f"期間が短すぎて、選ぶ期間({settings.in_sample_months}か月)と使う期間({settings.out_of_sample_months}か月)を"
-        "1回も取れません。期間を広げるか、選ぶ期間・使う期間を短くしてください"
+        "1回も取れません。期間を広げるか、選ぶ期間・使う期間を短くしてください",
+        "windows",
     )
 
 
@@ -198,7 +208,7 @@ def make_windows(
     """7章の5・8。区切りを作り、選ぶ期間の始まりをそろえ、営業日が3日以上あるかを確かめる。"""
     plan = calendar_windows(start, end, settings.in_sample_months, settings.out_of_sample_months)
     if not plan:
-        raise EngineInputError(no_windows_message(settings))
+        raise no_windows_error(settings)
     windows = []
     for index, (in_start, in_end, out_start, out_end) in enumerate(plan, start=1):
         aligned = in_sample_start(bars, in_start, longest)
@@ -207,13 +217,15 @@ def make_windows(
             or aligned > in_end
             or _business_days(bars, aligned, in_end) < MIN_PERIOD_BUSINESS_DAYS
         ):
-            raise EngineInputError(
+            raise WindowError(
                 f"長期の日数(最長{longest}日)のウォームアップに使う日を除くと、区切り{index}の選ぶ期間の営業日が"
-                "3日未満になります。長期の日数を短くするか、選ぶ期間を長くしてください"
+                "3日未満になります。長期の日数を短くするか、選ぶ期間を長くしてください",
+                "in_sample_months",
             )
         if _business_days(bars, out_start, out_end) < MIN_PERIOD_BUSINESS_DAYS:
-            raise EngineInputError(
-                f"区切り{index}の使う期間の営業日が3日未満です。使う期間を長くしてください"
+            raise WindowError(
+                f"区切り{index}の使う期間の営業日が3日未満です。使う期間を長くしてください",
+                "out_of_sample_months",
             )
         windows.append(
             Window(
@@ -241,7 +253,7 @@ def validate_walkforward(
     if start > end:  # 4
         raise EngineInputError("開始日は終了日より前の日付にしてください")
     if not calendar_windows(start, end, settings.in_sample_months, settings.out_of_sample_months):
-        raise EngineInputError(no_windows_message(settings))  # 5
+        raise no_windows_error(settings)  # 5
     validate_order(bars)  # 7
     longest = max(long for _, long in pairs)
     windows = make_windows(bars, start, end, longest, settings)  # 8
@@ -410,8 +422,12 @@ def assemble_walkforward(
         metrics=metrics,
         benchmark=benchmark,
         choice_changes=sum(1 for a, b in zip(choices, choices[1:], strict=False) if a != b),
+        # 買い持ちを買えなかった区切りとは比べない(docs/benchmark.md 3章)
+        compared_windows=sum(1 for r in results if r.benchmark_bought),
         beats_benchmark=sum(
-            1 for r in results if r.out_of_sample.total_return > r.benchmark_total_return
+            1
+            for r in results
+            if r.benchmark_bought and r.out_of_sample.total_return > r.benchmark_total_return
         ),
     )
 
@@ -452,6 +468,7 @@ __all__ = [
     "WalkForwardResult",
     "WalkForwardSettings",
     "Window",
+    "WindowError",
     "WindowResult",
     "add_months",
     "assemble_walkforward",
