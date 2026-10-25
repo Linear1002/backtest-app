@@ -7,7 +7,7 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from backend.api.convert import NOTE_MESSAGES, data_info_out
+from backend.api.convert import NOTE_MESSAGES, benchmark_metrics_out, data_info_out
 from backend.api.schemas import (
     ComboOut,
     NoteOut,
@@ -21,7 +21,8 @@ from backend.api.schemas import (
     SymbolOut,
 )
 from backend.marketdata.models import DailyBar, DataInfo
-from backend.sweep_summary import OBJECTIVES, rank
+from backend.sweep_summary import OBJECTIVES, objective_value, rank
+from engine.reference.benchmark import BuyAndHoldResult
 from engine.reference.sweep import (
     IN_SAMPLE,
     OUT_OF_SAMPLE,
@@ -53,14 +54,18 @@ class SweepContext:
 
 
 def segments_out(
-    segments: Sequence[Segment], bars: Sequence[DailyBar], requested_start: dt.date
+    segments: Sequence[Segment],
+    bars: Sequence[DailyBar],
+    requested_start: dt.date,
+    benchmarks: Sequence[BuyAndHoldResult],
 ) -> tuple[SegmentOut, ...]:
     """期間ごとの最初・最後の営業日と営業日の数(入力チェックを通ったあとなので、どの期間も3日以上ある)。
 
     選ぶ期間の始まりをそろえたとき(docs/sweep.md 3章)は、指定された開始日と、ウォームアップにだけ使った営業日の数も返す。
+    benchmarks は期間ごとの買い持ち(docs/benchmark.md。segments と同じ順番)。
     """
     out = []
-    for segment in segments:
+    for segment, benchmark in zip(segments, benchmarks, strict=True):
         days = [bar.date for bar in bars if segment.start <= bar.date <= segment.end]
         requested = requested_start if segment.name == IN_SAMPLE else segment.start
         skipped = sum(1 for bar in bars if requested <= bar.date < segment.start)
@@ -74,6 +79,7 @@ def segments_out(
                 first_business_day=days[0],
                 last_business_day=days[-1],
                 business_days=len(days),
+                benchmark=benchmark_metrics_out(benchmark),
             )
         )
     return tuple(out)
@@ -195,6 +201,16 @@ def notes_out(context: SweepContext, count: int) -> list[NoteOut]:
     notes.append(
         NoteOut(kind="execution_assumption", message=NOTE_MESSAGES["execution_assumption"])
     )
+    notes.append(
+        NoteOut(
+            kind="benchmark",
+            message=(
+                "買い持ちは、それぞれの期間の最初に売買が成立した日の終値で買うと決め、次に売買が成立した日の始値で"
+                "買えるだけ買って、その期間の最後まで持った場合です(手数料・スリッページ・分割の扱いは同じ)。"
+                "配当を含めないので、ずっと株を持つ買い持ちのほうが、実際より不利に出ます"
+            ),
+        )
+    )
     return notes
 
 
@@ -220,8 +236,13 @@ def result_out(
         for i, (short, long) in enumerate(pairs)
     ]
     rankings = []
+    by_name = {segment.name: segment.benchmark for segment in context.segments}
     for objective in OBJECTIVES:
-        r = rank(pairs, short_values, long_values, in_sample, out_of_sample, objective)
+        benchmark = (
+            objective_value(by_name.get(IN_SAMPLE), objective),
+            objective_value(by_name.get(OUT_OF_SAMPLE), objective),
+        )
+        r = rank(pairs, short_values, long_values, in_sample, out_of_sample, objective, benchmark)
         rankings.append(
             RankingOut(
                 objective=r.objective,
@@ -231,6 +252,8 @@ def result_out(
                 best_out_of_sample_rank=r.best_out_of_sample_rank,
                 in_sample_ranked=r.in_sample_ranked,
                 out_of_sample_ranked=r.out_of_sample_ranked,
+                in_sample_beats_benchmark=r.in_sample_beats_benchmark,
+                out_of_sample_beats_benchmark=r.out_of_sample_beats_benchmark,
                 rank_correlation=r.rank_correlation,
                 correlation_pairs=r.correlation_pairs,
                 neighbors_mean=r.neighbors_mean,

@@ -24,8 +24,11 @@ LARGER_IS_BETTER: dict[str, bool] = {
 OBJECTIVES: tuple[Objective, ...] = ("sharpe_ratio", "total_return", "max_drawdown")
 
 
-def objective_value(metrics: SegmentMetrics | None, objective: Objective) -> float | None:
-    """基準の値。算出不可(シャープレシオの標準偏差0など)や、期間がないときは None。"""
+def objective_value(metrics: object | None, objective: Objective) -> float | None:
+    """基準の値。算出不可(シャープレシオの標準偏差0など)や、期間がないときは None。
+
+    metrics は SegmentMetrics か、同じ名前の項目を持つもの(買い持ちの成績など)。
+    """
     if metrics is None:
         return None
     value = getattr(metrics, objective)
@@ -100,6 +103,10 @@ class Ranking:
     best_out_of_sample_rank: int | None  # 1位の、検証期間での順位(同率1位なら None)
     in_sample_ranked: int  # 選ぶ期間の値がある組み合わせの数
     out_of_sample_ranked: int  # 検証期間の値がある組み合わせの数
+    in_sample_beats_benchmark: (
+        int | None
+    )  # 選ぶ期間で買い持ちより良かった数(買い持ちの値がなければ None)
+    out_of_sample_beats_benchmark: int | None  # 検証期間で買い持ちより良かった数
     rank_correlation: float | None  # 選ぶ期間と検証期間の順位相関
     correlation_pairs: int  # 相関に使った組み合わせの数
     neighbors_mean: float | None  # 1位のとなりの、選ぶ期間の値の平均
@@ -129,6 +136,16 @@ def neighbors(
     return sorted(found)
 
 
+def beats(
+    values: Sequence[float | None], benchmark: float | None, objective: Objective
+) -> int | None:
+    """benchmark(買い持ちの値)より良い値の数。買い持ちの値がなければ None。同じ値は「良い」に数えない。"""
+    if benchmark is None:
+        return None
+    larger = LARGER_IS_BETTER[objective]
+    return sum(1 for v in values if v is not None and _key(v, larger) < _key(benchmark, larger))
+
+
 def rank(
     pairs: Sequence[tuple[int, int]],
     short_values: Sequence[int],
@@ -136,8 +153,12 @@ def rank(
     in_sample: Sequence[SegmentMetrics],
     out_of_sample: Sequence[SegmentMetrics] | None,
     objective: Objective,
+    benchmark: tuple[float | None, float | None] = (None, None),
 ) -> Ranking:
-    """1つの基準で、並べ方とまとめを作る。in_sample・out_of_sample は pairs と同じ順番。"""
+    """1つの基準で、並べ方とまとめを作る。in_sample・out_of_sample は pairs と同じ順番。
+
+    benchmark は (選ぶ期間, 検証期間) の買い持ちの基準の値(docs/benchmark.md)。買い持ちより良かった組み合わせを数える。
+    """
     is_values = [objective_value(m, objective) for m in in_sample]
     oos_values = (
         [objective_value(m, objective) for m in out_of_sample]
@@ -184,6 +205,10 @@ def rank(
         ),
         in_sample_ranked=sum(1 for v in is_values if v is not None),
         out_of_sample_ranked=sum(1 for v in oos_values if v is not None),
+        in_sample_beats_benchmark=beats(is_values, benchmark[0], objective),
+        out_of_sample_beats_benchmark=(
+            beats(oos_values, benchmark[1], objective) if out_of_sample is not None else None
+        ),
         rank_correlation=correlation,
         correlation_pairs=len(both),
         neighbors_mean=neighbors_mean,
