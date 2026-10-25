@@ -1,7 +1,8 @@
 """比較の基準:買い持ちのリファレンス実装(docs/benchmark.md)。
 
 期間内の最初の有効日の終値で「買う」と決め、次の有効日の始値で買えるだけ買って、期間の最後まで持つ。
-約定・株数・分割・評価・指標は、移動平均クロス(backtest.py)と同じ関数を使う(買い持ちのために書き直さない)。
+約定(fill_buy)・分割・併合(apply_split_or_merger)・評価価格・指標は、移動平均クロス(backtest.py)と同じ関数を使う
+(買い持ちのために書き直さない)。
 1日の処理の順番も同じ(docs/mvp.md 2.5 の手順1〜3)。シグナルの判定(手順4)の代わりに、最初の有効日に「買う」と決める。
 
 C++ 版・CUDA 版の約束(docs/cpp/contract.md)には入れない。API はいつもこの Python の関数で計算する。
@@ -15,8 +16,8 @@ from dataclasses import dataclass
 
 from engine.reference.backtest import (
     MIN_PERIOD_BUSINESS_DAYS,
-    check_int64,
-    decide_buy_shares,
+    apply_split_or_merger,
+    fill_buy,
     is_split_or_merger,
     validate_order,
     validate_params,
@@ -24,7 +25,6 @@ from engine.reference.backtest import (
     valuation_price,
 )
 from engine.reference.metrics import compute_metrics
-from engine.reference.ratio import recover_split_ratio
 from engine.reference.types import (
     Bar,
     CorporateActionEvent,
@@ -107,65 +107,23 @@ def run_buy_and_hold(
     for t, bar in enumerate(period):
         # 手順1:分割・併合の処理(docs/mvp.md 2.8)。移動平均クロスと同じ計算
         if is_split_or_merger(bar) and shares > 0:
-            assert bar.adj_factor is not None
-            p, q = recover_split_ratio(bar.adj_factor)
-            scaled = check_int64(shares * p, "株数")
-            new_shares = scaled // q
-            remainder = scaled % q
-            fraction_shares = remainder / q
-            fraction_cash = fraction_shares * valuation_price(period, t) if remainder else 0.0
-            cash = cash + fraction_cash
-            events.append(
-                CorporateActionEvent(
-                    date=bar.date,
-                    ex_rt=bar.ex_rt,  # type: ignore[arg-type]
-                    adj_factor=bar.adj_factor,
-                    ratio_numerator=p,
-                    ratio_denominator=q,
-                    shares_before=shares,
-                    shares_after=new_shares,
-                    fraction_shares=fraction_shares,
-                    fraction_cash=fraction_cash,
-                    closed_position=new_shares == 0,
-                )
-            )
-            shares = new_shares  # 併合で0株になったら、そのあとは現金のまま(買い直さない)
+            split = apply_split_or_merger(period, t, shares)
+            cash = cash + split.fraction_cash
+            events.append(split.event)
+            shares = split.shares  # 併合で0株になったら、そのあとは現金のまま(買い直さない)
 
         # 手順2:約定(docs/mvp.md 2.6・2.7)。始値が Null なら次の有効日に繰り越す
         if pending and bar.open is not None:
             assert signal_date is not None
-            fill_price = bar.open * (1 + params.slippage_rate)
-            buy_shares, unit_cost = decide_buy_shares(
-                cash, fill_price, params.fee_rate, params.lot_size
-            )
-            if buy_shares == 0:
-                # 資金不足。買い持ちは買い直さない(docs/benchmark.md 2章の2)
-                skipped = SkippedOrder(
-                    date=bar.date,
-                    signal_date=signal_date,
-                    open_price=bar.open,
-                    fill_price=fill_price,
-                    cash=cash,
-                )
+            bought = fill_buy(bar, signal_date, cash, params)
+            if bought.fill is None:
+                skipped = (
+                    bought.skipped
+                )  # 資金不足。買い持ちは買い直さない(docs/benchmark.md 2章の2)
             else:
-                notional = fill_price * buy_shares
-                fee = notional * params.fee_rate
-                buy_cost = unit_cost * buy_shares
-                cash = cash - buy_cost
-                if cash < 0:
-                    raise AssertionError("買った後の現金が負になりました(実装のバグ)")
-                shares = buy_shares
-                fill = Fill(
-                    date=bar.date,
-                    signal_date=signal_date,
-                    side="buy",
-                    open_price=bar.open,
-                    fill_price=fill_price,
-                    shares=buy_shares,
-                    notional=notional,
-                    fee=fee,
-                    cash_after=cash,
-                )
+                fill = bought.fill
+                cash = bought.fill.cash_after
+                shares = bought.shares
             pending = False
 
         # 手順3:評価(docs/mvp.md 5章)

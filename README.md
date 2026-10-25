@@ -41,7 +41,7 @@
    (架空データ DEMO:1003 の既定の条件では、選ぶ期間の1位が検証期間では 105通り中 74位、順位相関は −0.17 だった)。
    長期の日数が違う組み合わせも同じ日から評価し、色の物差しにも検証期間の値を混ぜない
 7. **比べる相手を置く**:株価が上がった期間なら、下手な売買ルールでも利益は出る。だから、同じ期間・同じ費用の**買い持ち**と必ず並べる。
-   買い持ちも、株数の決め方・分割の比率・評価価格・指標は売買ルールと同じ関数で計算し、「1回だけ買って持ち続けた移動平均クロス」と資産額が完全に一致することをテストで確かめている
+   買い持ちも、約定と株数の決め方・分割の処理・評価価格・指標は売買ルールと同じ関数で計算し、「1回だけ買って持ち続けた移動平均クロス」と資産額が完全に一致することをテストで確かめている
    (DEMO:1003 の既定の条件では、移動平均クロスの +79.1% に対して買い持ちは +178.0%。総当たりでも、検証期間で買い持ちを上回ったのは 105通り中 35通り)
 8. **独立した検証役**:実装とは別に、仕様との食い違いを探す役(検証部)とコードレビュー役を置き、見つかった問題を直した(例:調整済み株価で株数を決めると、将来の分割の情報で「買えなかったはずの取引」が成立してしまう問題)
 
@@ -132,6 +132,6 @@ A Japanese-language web app for backtesting trading rules on Japanese equities, 
 - **Spec-first**: `docs/mvp.md` specifies every rule down to summation order, rounding and error precedence.
 - **Three-tier correctness**: a slow, readable Python reference engine is the oracle; the C++ engine (being written by the author) must match it on 60 golden cases (exact for dates, share counts and win/loss; 1e-9 relative tolerance for amounts — or bit-for-bit in strict mode), and a future CUDA parameter sweep must match the C++ engine.
 - **Parameter sweep with an honest holdout**: grid search over moving-average windows (up to 2,000 pairs in Python, run as a cancellable background job across processes), ranked on an in-sample period only and re-tested on a held-out period. The UI leads with the number of trials, the in-sample winner's out-of-sample rank and the Spearman rank correlation between the two periods, so a lucky winner is visible as such (`docs/sweep.md`, 24 golden sweep cases).
-- **A benchmark you can't skip**: every result is shown next to buy-and-hold over the same period with the same costs, computed with the same sizing, split-ratio, valuation and metric functions as the strategy (and verified to match the strategy exactly whenever the strategy happens to buy once and hold) (`docs/benchmark.md`).
+- **A benchmark you can't skip**: every result is shown next to buy-and-hold over the same period with the same costs, computed with the same fill, sizing, split, valuation and metric functions as the strategy (and verified to match the strategy exactly whenever the strategy happens to buy once and hold) (`docs/benchmark.md`).
 - **Stack**: Next.js/TypeScript (hand-drawn SVG charts and an ARIA-grid heatmap), FastAPI, J-Quants API with rate limiting and Parquet caching, pytest/GoogleTest/node:test/Playwright with automated WCAG checks, GitHub Actions CI.
 - **AI collaboration, stated honestly**: the UI, API, data layer and reference engine were written with Claude Code under the author's review; the C++/CUDA engines are the author's own work.

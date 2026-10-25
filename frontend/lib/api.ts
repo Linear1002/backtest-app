@@ -191,11 +191,20 @@ export type BenchmarkMetrics = {
   final_equity: number;
 };
 
+/** bought:買った / insufficient_cash:資金不足で買えなかった / not_bought:買う日がなかった。買えなかったときは比べない */
+export type BenchmarkStatus = "bought" | "insufficient_cash" | "not_bought";
+
+/** 総当たりの期間ごとの買い持ち */
+export type SegmentBenchmark = BenchmarkMetrics & {
+  status: BenchmarkStatus;
+  /** 期間の最後に株を持っていたか(清算コスト控除前) */
+  open_position_at_end: boolean;
+};
+
 /** 比較の基準:買い持ち(docs/benchmark.md) */
 export type Benchmark = {
   label: string;
-  /** bought:買った / insufficient_cash:資金不足で買えなかった / not_bought:買う日がなかった */
-  status: "bought" | "insufficient_cash" | "not_bought";
+  status: BenchmarkStatus;
   signal_date: string | null;
   fill: Fill | null;
   skipped: SkippedOrder | null;
@@ -295,7 +304,7 @@ export type SweepSegment = {
   last_business_day: string;
   business_days: number;
   /** この期間の買い持ち(docs/benchmark.md)の成績 */
-  benchmark: BenchmarkMetrics;
+  benchmark: SegmentBenchmark;
 };
 
 export type SweepMetrics = {

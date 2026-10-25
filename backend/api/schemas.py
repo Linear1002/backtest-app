@@ -327,13 +327,25 @@ class BenchmarkMetricsOut(_Model):
     final_equity: float
 
 
+BenchmarkStatus = Literal["bought", "insufficient_cash", "not_bought"]
+BENCHMARK_STATUS_HELP = (
+    "bought:買った / insufficient_cash:資金不足で買えなかった / not_bought:買う日がなかった。"
+    "買えなかったときは、比べない(値は初期資金のまま)"
+)
+
+
+class SegmentBenchmarkOut(BenchmarkMetricsOut):
+    """総当たりの期間ごとの買い持ち(docs/benchmark.md)。"""
+
+    status: BenchmarkStatus = Field(description=BENCHMARK_STATUS_HELP)
+    open_position_at_end: bool = Field(description="期間の最後に株を持っていたか(清算コスト控除前)")
+
+
 class BenchmarkOut(_Model):
     """比較の基準:買い持ち(docs/benchmark.md)。同じ期間・同じ費用で、最初に買って最後まで持った場合。"""
 
     label: str
-    status: Literal["bought", "insufficient_cash", "not_bought"] = Field(
-        description="bought:買った / insufficient_cash:資金不足で買えなかった / not_bought:買う日がなかった"
-    )
+    status: BenchmarkStatus = Field(description=BENCHMARK_STATUS_HELP)
     signal_date: dt.date | None = Field(description="買うと決めた日(期間内の最初の有効日)")
     fill: FillOut | None
     skipped: SkippedOrderOut | None
@@ -433,7 +445,7 @@ class SegmentOut(_Model):
     first_business_day: dt.date
     last_business_day: dt.date
     business_days: int
-    benchmark: BenchmarkMetricsOut = Field(
+    benchmark: SegmentBenchmarkOut = Field(
         description="この期間の買い持ち(docs/benchmark.md)の成績"
     )
 

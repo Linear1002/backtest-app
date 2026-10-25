@@ -36,7 +36,8 @@ NOTE_MESSAGES = {
     "benchmark": (
         "買い持ちは、期間の最初に売買が成立した日の終値で買うと決め、次に売買が成立した日の始値で買えるだけ買って、"
         "最後まで持った場合です(手数料・スリッページ・分割の扱いは同じ)。配当を含めないので、ずっと株を持つ買い持ちのほうが、"
-        "実際より不利に出ます"
+        "実際より不利に出ます。一方、買い持ちの最後の日は売らずに評価する(清算コスト控除前)ので、売買ルールが最後に"
+        "売り切っているときは、その売りの費用の分だけ買い持ちが有利です"
     ),
 }
 
@@ -278,17 +279,20 @@ def benchmark_metrics_out(b: BuyAndHoldResult) -> BenchmarkMetricsOut:
     )
 
 
+def benchmark_status(b: BuyAndHoldResult) -> str:
+    """買えたか(bought)、資金不足で買えなかったか(insufficient_cash)、買う日がなかったか(not_bought)。"""
+    if b.fill is not None:
+        return "bought"
+    if b.skipped is not None:
+        return "insufficient_cash"
+    return "not_bought"
+
+
 def benchmark_out(b: BuyAndHoldResult) -> BenchmarkOut:
     """買い持ち(docs/benchmark.md)の結果。"""
-    if b.fill is not None:
-        status = "bought"
-    elif b.skipped is not None:
-        status = "insufficient_cash"
-    else:
-        status = "not_bought"
     return BenchmarkOut(
         label=BENCHMARK_LABEL,
-        status=status,
+        status=benchmark_status(b),  # type: ignore[arg-type]
         signal_date=b.signal_date,
         fill=fill_out(b.fill) if b.fill is not None else None,
         skipped=skipped_order_out(b.skipped) if b.skipped is not None else None,
