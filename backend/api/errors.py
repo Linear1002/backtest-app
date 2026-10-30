@@ -15,6 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from backend.api.routes import SweepNotFoundError
 from backend.api.validation import InputValidationError
 from backend.engines import EngineUnavailableError
 from backend.marketdata.models import InvalidSymbolIdError
@@ -23,6 +24,7 @@ from backend.marketdata.source import (
     DataSourceRequestError,
     SymbolNotFoundError,
 )
+from backend.sweeps import TooManyJobsError
 from engine.reference import EngineDataError, EngineInputError
 
 logger = logging.getLogger("backend.api")
@@ -46,7 +48,7 @@ def _field_name(loc: tuple[Any, ...] | list[Any]) -> str | None:
     parts = [str(p) for p in loc]
     if parts and parts[0] in ("body", "query", "path"):
         parts = parts[1:]
-    if parts and parts[0] == "params":
+    if parts and parts[0] in ("params", "grid"):
         parts = parts[1:]
     return ".".join(parts) or None
 
@@ -108,6 +110,14 @@ def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(EngineDataError)
     async def engine_data(_: Request, exc: EngineDataError) -> JSONResponse:
         return _response(422, f"データに異常があるため計算できません:{exc}")
+
+    @app.exception_handler(SweepNotFoundError)
+    async def sweep_not_found(_: Request, exc: SweepNotFoundError) -> JSONResponse:
+        return _response(404, str(exc))
+
+    @app.exception_handler(TooManyJobsError)
+    async def too_many_jobs(_: Request, exc: TooManyJobsError) -> JSONResponse:
+        return _response(409, str(exc))
 
     @app.exception_handler(EngineUnavailableError)
     async def engine_unavailable(_: Request, exc: EngineUnavailableError) -> JSONResponse:

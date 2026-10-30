@@ -5,6 +5,7 @@
       uv run python -m tests.python.test_param_contract
 - tests/fixtures/param_messages.json:入力 → 誤りのメッセージ の表。画面のテストも同じ表を読む
 - tests/fixtures/period_messages.json:期間の入力 → 誤りのメッセージ の表。画面のテストも同じ表を読む
+- tests/fixtures/sweep_messages.json:総当たりの格子の入力 → 誤りのメッセージ・組み合わせの数 の表(docs/sweep.md)
 """
 
 from __future__ import annotations
@@ -15,8 +16,13 @@ from pathlib import Path
 
 import pytest
 
-from backend.api.schemas import MaCrossParamsIn, ParamOut
-from backend.api.validation import InputValidationError, validate_params, validate_period
+from backend.api.schemas import MaCrossParamsIn, ParamOut, SweepCostsIn, SweepGridIn
+from backend.api.validation import (
+    InputValidationError,
+    validate_params,
+    validate_period,
+    validate_sweep_inputs,
+)
 from backend.marketdata.models import DateRange, SymbolId
 from backend.marketdata.synthetic import generate_bars
 from backend.strategies import STRATEGIES_BY_ID
@@ -91,6 +97,34 @@ def test_api_gives_the_same_period_message_as_the_screen(case: dict, demo_bars: 
     with pytest.raises(InputValidationError) as caught:
         validate_period(start, end, available, demo_bars)
     assert {e.field: e.message for e in caught.value.errors} == {case["field"]: case["message"]}
+
+
+SWEEPS = json.loads((FIXTURES / "sweep_messages.json").read_text(encoding="utf-8"))
+SWEEP_DEFAULTS = {
+    "short_min": 3,
+    "short_max": 30,
+    "short_step": 3,
+    "long_min": 20,
+    "long_max": 120,
+    "long_step": 10,
+}
+
+
+@pytest.mark.parametrize(
+    "case",
+    [c for c in SWEEPS["cases"] if not c["frontend_only"]],
+    ids=lambda c: json.dumps(c["grid"], ensure_ascii=False),
+)
+def test_api_gives_the_same_sweep_message_as_the_screen(case: dict) -> None:
+    grid_in = SweepGridIn(**{**SWEEP_DEFAULTS, **{k: float(v) for k, v in case["grid"].items()}})
+    market = SymbolId.parse("DEMO:1001").market_config
+    if not case["errors"]:
+        grid, _ = validate_sweep_inputs(grid_in, SweepCostsIn(), market, SWEEPS["max_pairs"])
+        assert len(grid.pairs()) == case["pairs"]
+        return
+    with pytest.raises(InputValidationError) as caught:
+        validate_sweep_inputs(grid_in, SweepCostsIn(), market, SWEEPS["max_pairs"])
+    assert {e.field: e.message for e in caught.value.errors} == case["errors"]
 
 
 if __name__ == "__main__":

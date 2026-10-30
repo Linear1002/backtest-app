@@ -1,24 +1,33 @@
 "use client";
 
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
-import { api, errorMessage, type ParamKey, type SymbolSummary } from "@/lib/api.ts";
+import { api, ApiError, errorMessage, type ParamKey, type SymbolSummary } from "@/lib/api.ts";
 import {
+  canShowSweep,
   canVisit,
   currentRequest,
+  currentSweepRequest,
   fieldErrorsFrom,
   flowReducer,
+  holdoutOf,
   initialFlow,
+  inspectedOrigin,
   needsSymbolLoad,
   resultIsOutdated,
   runErrorMessage,
+  runMode,
   selectedStrategy,
+  showSweepReplacesInput,
+  sweepEngineInfo,
   unplacedErrorMessage,
   type FlowState,
   type StepId,
 } from "@/lib/flow.ts";
 import { describeYen, formatDate, formatRatePct, formatYen } from "@/lib/format.ts";
 import { parseParams, toNumber } from "@/lib/form.ts";
+import { pairCount, parseSweepGrid } from "@/lib/sweep.ts";
+import { runSweepJob } from "@/lib/sweepJob.ts";
 
 import { ResultView } from "./results/ResultView.tsx";
 import { Seal } from "./Seal.tsx";
@@ -26,14 +35,26 @@ import { Stepper } from "./Stepper.tsx";
 import { ConfirmStep } from "./steps/ConfirmStep.tsx";
 import { ParamsStep } from "./steps/ParamsStep.tsx";
 import { StrategyStep } from "./steps/StrategyStep.tsx";
+import { SweepConfirmStep } from "./steps/SweepConfirmStep.tsx";
 import { SymbolStep } from "./steps/SymbolStep.tsx";
+import { SweepView } from "./sweep/SweepView.tsx";
 import { SecondaryButton } from "./ui.tsx";
+
+const count = new Intl.NumberFormat("ja-JP");
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export function BacktestApp() {
   const [state, dispatch] = useReducer(flowReducer, initialFlow);
-  // 問い合わせの番号(銘柄の詳細・バックテストの実行)。いちばん新しい番号の応答だけを受け取る
+  // 問い合わせの番号(銘柄の詳細・バックテストの実行・総当たり)。いちばん新しい番号の応答だけを受け取る
   const seq = useRef(0);
+  // いま途中経過を問い合わせている総当たりの番号(画面を閉じたら null にして、問い合わせをやめる)
+  const polling = useRef<number | null>(null);
   const mainRef = useRef<HTMLElement>(null);
+  // 総当たりの「中止する」が API に届かなかったとき(実行中の表示に出す。次に実行・中止したら消す)
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   const loadCatalog = useCallback(() => {
     Promise.all([api.meta(), api.strategies()])
@@ -47,17 +68,28 @@ export function BacktestApp() {
     loadCatalog();
   }, [loadCatalog]);
 
+  useEffect(
+    () => () => {
+      polling.current = null;
+    },
+    [],
+  );
+
   // 手順が変わったら、その手順の見出しへ。入力に誤りがあれば、最初の誤りの欄へフォーカスを移す
   useEffect(() => {
     if (state.focus.seq === 0) return;
     const frame = requestAnimationFrame(() => {
       const main = mainRef.current;
       if (!main) return;
-      if (state.focus.target === "error") {
-        const field = main.querySelector<HTMLElement>('[aria-invalid="true"]');
-        if (field) {
-          field.focus({ preventScroll: true });
-          field.scrollIntoView({ block: "center" });
+      if (state.focus.target === "error" || state.focus.target === "notice") {
+        // 欄のない誤り(総当たりの「組み合わせがない」など)は data-invalid-anchor の場所に、
+        // 知らせ(総当たりを中止した、など)は data-focus-notice の場所に出している
+        const selector =
+          state.focus.target === "error" ? '[aria-invalid="true"], [data-invalid-anchor="true"]' : "[data-focus-notice]";
+        const target = main.querySelector<HTMLElement>(selector);
+        if (target) {
+          target.focus({ preventScroll: true });
+          target.scrollIntoView({ block: "center" });
           return;
         }
       }
@@ -99,18 +131,97 @@ export function BacktestApp() {
     }
   }
 
+  /** 総当たり:API にジョブを作らせ、終わるまで途中経過を問い合わせる(docs/sweep.md 10章。決まりは lib/sweepJob.ts)。 */
+  async function runSweep() {
+    const request = currentSweepRequest(state);
+    if (!request || state.running) return;
+    seq.current += 1;
+    const id = seq.current;
+    dispatch({ type: "sweepStarted", id, request });
+    setCancelError(null);
+    polling.current = id;
+    const outcome = await runSweepJob(request, {
+      api,
+      wait,
+      isCurrent: () => polling.current === id,
+      onProgress: (status) => dispatch({ type: "sweepProgress", id, jobId: status.id, done: status.done, total: status.total }),
+    });
+    if (polling.current === id) polling.current = null;
+    switch (outcome.kind) {
+      case "done":
+        dispatch({ type: "sweepSucceeded", id, result: outcome.status.result!, elapsedMs: outcome.status.elapsed_ms });
+        return;
+      case "cancelled":
+        dispatch({ type: "sweepCancelled", id });
+        return;
+      case "failed":
+        dispatch({ type: "sweepFailed", id, message: outcome.message, fieldErrors: {} });
+        return;
+      case "error": {
+        const fieldErrors = fieldErrorsFrom(outcome.error, request);
+        const message =
+          Object.keys(fieldErrors).length > 0
+            ? unplacedErrorMessage(outcome.error, request)
+            : runErrorMessage(outcome.error, request, "総当たりを実行できませんでした");
+        dispatch({ type: "sweepFailed", id, message, fieldErrors });
+        return;
+      }
+      case "stopped":
+        // 問い合わせをやめた(画面を閉じた・開発中の再読み込み)。ジョブの中止は頼んである。
+        // 画面が残っているとき(開発中の再読み込み)に「計算しています」のまま止まらないよう、中止したことにする
+        dispatch({ type: "sweepCancelled", id });
+        return;
+    }
+  }
+
+  function cancelSweep() {
+    const running = state.running;
+    if (running?.kind !== "sweep" || !running.jobId) return;
+    setCancelError(null);
+    // 中止できたことは、問い合わせの続き(status が cancelled)で受け取る。頼めなかったときだけ、ここで知らせる
+    api
+      .cancelSweep(running.jobId)
+      .catch((e: unknown) =>
+        setCancelError(
+          e instanceof ApiError ? `中止できませんでした:${e.message}` : "中止できませんでした。もう一度押してください",
+        ),
+      );
+  }
+
   // 結果の動きを再生し終えたら記録する(dispatch は変わらないので、この関数も描き直しで変わらない)
   const onAnimated = useCallback((id: number) => dispatch({ type: "resultAnimated", id }), []);
+  // 総当たりの結果の画面に渡す関数も、描き直しで変わらないようにする(ヒートマップのマスを描き直さないため)
+  const onSweepView = useCallback(
+    (view: Partial<FlowState["sweepView"]>) => dispatch({ type: "sweepView", view }),
+    [],
+  );
+  const onInspect = useCallback(
+    (short: number, long: number, segment: "in_sample" | "out_of_sample") =>
+      dispatch({ type: "inspectCombo", short, long, segment }),
+    [],
+  );
 
   const goTo = (step: StepId) => dispatch({ type: "goTo", step });
+  const backToSweep = canShowSweep(state) ? () => dispatch({ type: "showSweep" }) : null;
   const strategy = selectedStrategy(state);
   const meta = state.catalog?.meta ?? null;
+  const mode = runMode(state);
   const request = currentRequest(state);
+  const sweepRequest = currentSweepRequest(state);
+  const running = state.running;
   const dataSourceLabel = meta
     ? meta.data_sources.map((s) => s.label).join("、")
     : state.catalogError
       ? "読み込めませんでした"
       : "読み込み中";
+  const inputError = (
+    <div className="rounded-md border border-shu px-4 py-3 text-[14px] text-shu" role="alert">
+      条件に入力の誤りがあります。条件の画面に戻って直してください。
+      <div className="mt-3">
+        <SecondaryButton onClick={() => goTo(3)}>条件の画面に戻る</SecondaryButton>
+      </div>
+    </div>
+  );
 
   return (
     <div className="mx-auto w-full max-w-[1180px] px-4 pb-24 sm:px-6 lg:px-8">
@@ -181,13 +292,16 @@ export function BacktestApp() {
               form={state.form}
               errors={state.fieldErrors}
               notice={state.runError}
+              sweepMaxPairs={sweepEngineInfo(state)?.max_pairs ?? null}
               onChange={(form) => dispatch({ type: "editForm", form })}
+              onModeChange={(next) => dispatch({ type: "setMode", mode: next })}
               onNext={() => dispatch({ type: "submitParams" })}
             />
           )}
           {state.step === 4 &&
             state.detail &&
             strategy &&
+            mode === "single" &&
             (request ? (
               <ConfirmStep
                 detail={state.detail}
@@ -195,20 +309,42 @@ export function BacktestApp() {
                 request={request}
                 engines={meta?.engines ?? []}
                 onEngineChange={(id) => dispatch({ type: "selectEngine", id })}
-                running={state.running !== null}
+                running={running !== null}
                 error={state.runError}
                 outdated={resultIsOutdated(state)}
                 onRun={run}
+                origin={inspectedOrigin(state)}
+                onBackToSweep={backToSweep}
+                backToSweepReplacesInput={showSweepReplacesInput(state)}
               />
             ) : (
-              <div className="rounded-md border border-shu px-4 py-3 text-[14px] text-shu" role="alert">
-                条件に入力の誤りがあります。条件の画面に戻って直してください。
-                <div className="mt-3">
-                  <SecondaryButton onClick={() => goTo(3)}>条件の画面に戻る</SecondaryButton>
-                </div>
-              </div>
+              inputError
             ))}
-          {state.step === 5 && state.last && (
+          {state.step === 4 &&
+            state.detail &&
+            strategy &&
+            mode === "sweep" &&
+            (sweepRequest || running?.kind === "sweep" ? (
+              <SweepConfirmStep
+                detail={state.detail}
+                strategy={strategy}
+                // 実行中は、送ったリクエストを出す(実行中は条件を変えられないので、いまの条件と同じもの)
+                request={running?.kind === "sweep" ? running.request : sweepRequest!}
+                engines={meta?.sweep_engines ?? []}
+                onEngineChange={(id) => dispatch({ type: "selectSweepEngine", id })}
+                running={running !== null}
+                progress={running?.kind === "sweep" && running.jobId ? { done: running.done, total: running.total } : null}
+                cancelled={state.sweepCancelled}
+                cancelError={cancelError}
+                error={state.runError}
+                outdated={resultIsOutdated(state)}
+                onRun={runSweep}
+                onCancel={cancelSweep}
+              />
+            ) : (
+              inputError
+            ))}
+          {state.step === 5 && mode === "single" && state.last && (
             <ResultView
               key={state.last.id}
               record={state.last}
@@ -216,6 +352,19 @@ export function BacktestApp() {
               onAnimated={onAnimated}
               onEditParams={() => goTo(3)}
               onRestart={() => goTo(1)}
+              onBackToSweep={backToSweep}
+              backToSweepReplacesInput={showSweepReplacesInput(state)}
+            />
+          )}
+          {state.step === 5 && mode === "sweep" && state.lastSweep && (
+            <SweepView
+              key={state.lastSweep.id}
+              record={state.lastSweep}
+              view={state.sweepView}
+              onViewChange={onSweepView}
+              onEditParams={() => goTo(3)}
+              onRestart={() => goTo(1)}
+              onInspect={onInspect}
             />
           )}
         </main>
@@ -228,6 +377,7 @@ export function BacktestApp() {
 function ConditionSlip({ state, onJump }: { state: FlowState; onJump: (step: StepId) => void }) {
   const strategy = selectedStrategy(state);
   const form = state.form;
+  const sweep = form?.mode === "sweep";
   const errors = form && strategy ? parseParams(form, strategy.params).errors : {};
   // 項目ごとに、誤りがなければ数値、誤りがあれば null(「入力を確認してください」と出す)
   const value = (key: ParamKey): number | null =>
@@ -237,6 +387,8 @@ function ConditionSlip({ state, onJump }: { state: FlowState; onJump: (step: Ste
   const windows = both(value("short_window"), value("long_window"));
   const costs = both(value("fee_rate_pct"), value("slippage_rate_pct"));
   const cash = value("initial_cash");
+  const grid = form && sweep ? parseSweepGrid(form.sweep, null).grid : null;
+  const holdout = form && sweep ? holdoutOf(form) : null;
 
   type Row = { step: StepId; label: string; value: string | null; invalid?: boolean };
   const rows: Row[] = [
@@ -247,12 +399,24 @@ function ConditionSlip({ state, onJump }: { state: FlowState; onJump: (step: Ste
       label: "期間",
       value: form ? `${formatDate(form.start_date)}〜\n${formatDate(form.end_date)}` : null,
     },
-    {
-      step: 3,
-      label: "移動平均",
-      value: windows ? `短期${windows[0]}日・長期${windows[1]}日` : null,
-      invalid: invalid("short_window", "long_window"),
-    },
+    sweep
+      ? {
+          step: 3,
+          label: "移動平均(総当たり)",
+          value: grid
+            ? `短期${grid.short_min}〜${grid.short_max}日\n長期${grid.long_min}〜${grid.long_max}日\n${count.format(pairCount(grid))}通り`
+            : null,
+          invalid: form !== null && grid === null,
+        }
+      : {
+          step: 3,
+          label: "移動平均",
+          value: windows ? `短期${windows[0]}日・長期${windows[1]}日` : null,
+          invalid: invalid("short_window", "long_window"),
+        },
+    ...(sweep
+      ? [{ step: 3 as StepId, label: "検証期間", value: holdout ? `${formatDate(holdout)}〜` : "使わない" }]
+      : []),
     {
       step: 3,
       label: "費用",

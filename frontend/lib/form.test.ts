@@ -11,6 +11,7 @@ import {
   type FieldErrors,
   type FormState,
 } from "./form.ts";
+import { DEFAULT_SWEEP_FORM } from "./sweep.ts";
 import { fixture, SPECS } from "./testing.ts";
 
 const range = { first_date: "2022-01-04", last_date: "2026-07-31" };
@@ -27,6 +28,8 @@ function form(params: Partial<FormState["params"]> = {}, period: Partial<FormSta
       initial_cash: "1000000",
       ...params,
     },
+    mode: "single",
+    sweep: { ...DEFAULT_SWEEP_FORM },
     ...period,
   };
 }

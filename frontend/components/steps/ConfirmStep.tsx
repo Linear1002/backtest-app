@@ -3,9 +3,11 @@
 import { useId } from "react";
 
 import type { BacktestRequest, EngineInfo, Strategy, SymbolDetail } from "@/lib/api.ts";
+import { sameCalculationAsSweep, type SweepOrigin } from "@/lib/flow.ts";
 import { describeYen, formatDate, formatRatePct, formatYen } from "@/lib/format.ts";
 
 import { Seal } from "../Seal.tsx";
+import { BackToSweepButton, SweepOriginNote } from "../sweep/SweepOriginNote.tsx";
 import { StepHeading } from "../ui.tsx";
 
 // docs/mvp.md 2.4〜2.7・7章の要約(backend/strategies.py の説明文と同じ前提)
@@ -27,6 +29,9 @@ export function ConfirmStep({
   error,
   outdated,
   onRun,
+  origin = null,
+  onBackToSweep = null,
+  backToSweepReplacesInput = false,
 }: {
   detail: SymbolDetail;
   strategy: Strategy;
@@ -39,6 +44,12 @@ export function ConfirmStep({
   /** 前に出した結果があり、その条件といまの条件が違う */
   outdated: boolean;
   onRun: () => void;
+  /** 総当たりの結果から「詳しく見る」で来たとき、その期間と試した数 */
+  origin?: SweepOrigin | null;
+  /** 総当たりの結果に戻る(総当たりの結果があるとき) */
+  onBackToSweep?: (() => void) | null;
+  /** 戻ると、条件が総当たりを実行したときのものに置き換わる(lib/flow.ts の showSweepReplacesInput) */
+  backToSweepReplacesInput?: boolean;
 }) {
   const headingId = useId();
   const params = request.params;
@@ -119,6 +130,12 @@ export function ConfirmStep({
         </div>
       </fieldset>
 
+      {origin && (
+        <div className="mt-6">
+          <SweepOriginNote origin={origin} done={false} sameCalculation={sameCalculationAsSweep(origin, request.engine)} />
+        </div>
+      )}
+
       {outdated && !running && (
         <p className="mt-6 text-[13px] leading-6 text-ink-2">
           ※ 前に出した結果とは条件が違います。実行すると、この条件の新しい結果になります。
@@ -131,7 +148,10 @@ export function ConfirmStep({
         </p>
       )}
 
-      <div className="mt-8 flex justify-end border-t border-rule pt-6">
+      <div className="mt-8 flex flex-wrap items-center justify-end gap-3 border-t border-rule pt-6">
+        {onBackToSweep && (
+          <BackToSweepButton onClick={onBackToSweep} disabled={running} replacesInput={backToSweepReplacesInput} />
+        )}
         <button
           type="button"
           onClick={onRun}

@@ -2,9 +2,11 @@
 
 import { useId } from "react";
 
-import type { ParamKey, ParamSpec, SymbolDetail } from "@/lib/api.ts";
+import type { ParamKey, ParamSpec, SweepGridKey, SymbolDetail } from "@/lib/api.ts";
 import { describeYen, formatDate } from "@/lib/format.ts";
-import { presetPeriod, toNumber, type FieldErrors, type FormState } from "@/lib/form.ts";
+import { presetPeriod, toNumber, type FieldErrors, type FormState, type RunMode } from "@/lib/form.ts";
+import { holdoutOf } from "@/lib/flow.ts";
+import { dayBefore, holdoutStart, longestWindow, parseSweepGrid, validateHoldout, type HoldoutChoice } from "@/lib/sweep.ts";
 
 import { FieldError, PrimaryButton, StepHeading } from "../ui.tsx";
 
@@ -19,13 +21,30 @@ const PERIOD_PRESETS: { years: number | null; label: string }[] = [
   { years: 1, label: "直近1年" },
 ];
 
+const MODES: { mode: RunMode; label: string; help: string }[] = [
+  { mode: "single", label: "1組で試す", help: "短期と長期の日数を1組決めて、売買の記録まで詳しく見る" },
+  { mode: "sweep", label: "総当たりで比べる", help: "日数の組み合わせをすべて試して、ヒートマップで比べる" },
+];
+
+const HOLDOUT_CHOICES: { choice: HoldoutChoice; label: string }[] = [
+  { choice: "last30", label: "最後の3割" },
+  { choice: "last20", label: "最後の2割" },
+  { choice: "last1y", label: "最後の1年" },
+  { choice: "custom", label: "日付を指定" },
+  { choice: "none", label: "使わない" },
+];
+
+const count = new Intl.NumberFormat("ja-JP");
+
 export function ParamsStep({
   detail,
   specs,
   form,
   errors,
   notice = null,
+  sweepMaxPairs = null,
   onChange,
+  onModeChange,
   onNext,
 }: {
   detail: SymbolDetail;
@@ -34,7 +53,10 @@ export function ParamsStep({
   errors: FieldErrors;
   /** 実行したときの、入力欄に出せない誤り(戦略・エンジンなど)の文 */
   notice?: string | null;
+  /** 総当たりのエンジンの、組み合わせの数の上限(エンジンの一覧がまだなければ null) */
+  sweepMaxPairs?: number | null;
   onChange: (next: FormState) => void;
+  onModeChange: (mode: RunMode) => void;
   onNext: () => void;
 }) {
   const headingId = useId();
@@ -58,6 +80,7 @@ export function ParamsStep({
     );
   };
   const cash = toNumber(form.params.initial_cash ?? "");
+  const sweep = form.mode === "sweep";
 
   return (
     <section aria-labelledby={headingId}>
@@ -118,27 +141,36 @@ export function ParamsStep({
         </Group>
 
         <Group title="移動平均の日数" note="短期線が長期線を上に抜けたら買い、下に抜けたら売り">
-          <div className="flex flex-wrap gap-2">
-            {WINDOW_PRESETS.map((p) => (
-              <Chip
-                key={p.label}
-                active={form.params.short_window === String(p.short) && form.params.long_window === String(p.long)}
-                onClick={() =>
-                  onChange({
-                    ...form,
-                    params: { ...form.params, short_window: String(p.short), long_window: String(p.long) },
-                  })
-                }
-              >
-                {p.label}
-              </Chip>
-            ))}
-          </div>
-          <div className="mt-3 grid gap-4 sm:grid-cols-2">
-            {field("short_window", "日")}
-            {field("long_window", "日")}
-          </div>
+          <ModeSwitch mode={form.mode} onChange={onModeChange} />
+          {sweep ? (
+            <SweepGridFields form={form} errors={errors} maxPairs={sweepMaxPairs} onChange={onChange} />
+          ) : (
+            <>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {WINDOW_PRESETS.map((p) => (
+                  <Chip
+                    key={p.label}
+                    active={form.params.short_window === String(p.short) && form.params.long_window === String(p.long)}
+                    onClick={() =>
+                      onChange({
+                        ...form,
+                        params: { ...form.params, short_window: String(p.short), long_window: String(p.long) },
+                      })
+                    }
+                  >
+                    {p.label}
+                  </Chip>
+                ))}
+              </div>
+              <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                {field("short_window", "日")}
+                {field("long_window", "日")}
+              </div>
+            </>
+          )}
         </Group>
+
+        {sweep && <HoldoutFields form={form} error={errors.holdout_start_date} onChange={onChange} />}
 
         <Group title="売買の費用" note="売りと買いの両方にかかります。0 にすると実際より良い結果になりやすいので注意">
           <div className="grid gap-4 sm:grid-cols-2">
@@ -156,6 +188,176 @@ export function ParamsStep({
         </div>
       </form>
     </section>
+  );
+}
+
+/** 「1組で試す」と「総当たりで比べる」の切り替え(ラジオボタンの組)。 */
+function ModeSwitch({ mode, onChange }: { mode: RunMode; onChange: (mode: RunMode) => void }) {
+  const name = useId();
+  return (
+    <div role="radiogroup" aria-label="試し方" className="grid gap-2 sm:grid-cols-2">
+      {MODES.map((m) => (
+        <label
+          key={m.mode}
+          className={`flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 text-[14px] ${
+            mode === m.mode ? "border-ink bg-surface" : "border-rule hover:bg-surface"
+          }`}
+        >
+          <input
+            type="radio"
+            name={name}
+            value={m.mode}
+            checked={mode === m.mode}
+            onChange={() => onChange(m.mode)}
+            className="mt-1.5 accent-[var(--ink)]"
+          />
+          <span>
+            <span className="block font-bold text-ink">{m.label}</span>
+            <span className="block text-[12px] leading-5 text-ink-3">{m.help}</span>
+          </span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
+const GRID_ROWS: { label: string; keys: [SweepGridKey, SweepGridKey, SweepGridKey] }[] = [
+  { label: "短期の日数", keys: ["short_min", "short_max", "short_step"] },
+  { label: "長期の日数", keys: ["long_min", "long_max", "long_step"] },
+];
+const GRID_PARTS = ["最小", "最大", "刻み"];
+
+/** 総当たりの格子(短期・長期それぞれ最小・最大・刻み)と、組み合わせの数。 */
+function SweepGridFields({
+  form,
+  errors,
+  maxPairs,
+  onChange,
+}: {
+  form: FormState;
+  errors: FieldErrors;
+  maxPairs: number | null;
+  onChange: (next: FormState) => void;
+}) {
+  const summaryId = useId();
+  // 入力のたびに数えて見せる(上限を超えたら、確認へ進む前に分かるように)
+  const parsed = parseSweepGrid(form.sweep, maxPairs);
+  const gridError = errors.grid;
+  return (
+    <div className="mt-4 space-y-4">
+      {GRID_ROWS.map((row) => (
+        <fieldset key={row.label}>
+          <legend className="text-[14px] text-ink-2">{row.label}</legend>
+          <div className="mt-1 grid grid-cols-3 gap-3">
+            {row.keys.map((key, i) => (
+              <SmallNumberField
+                key={key}
+                label={`${row.label}の${GRID_PARTS[i]}`}
+                visibleLabel={GRID_PARTS[i]}
+                value={form.sweep[key]}
+                unit="日"
+                error={errors[key]}
+                describedBy={summaryId}
+                onChange={(v) => onChange({ ...form, sweep: { ...form.sweep, [key]: v } })}
+              />
+            ))}
+          </div>
+        </fieldset>
+      ))}
+      <p
+        id={summaryId}
+        // 「組み合わせがない・多すぎる」はどの欄のものでもないので、確認へ進もうとしたときはここにフォーカスを移す
+        data-invalid-anchor={gridError ? "true" : undefined}
+        tabIndex={gridError ? -1 : undefined}
+        className={`text-[14px] leading-6 outline-none ${gridError ? "text-shu" : "text-ink-2"}`}
+      >
+        {gridError ??
+          (parsed.pairs !== null
+            ? `組み合わせ:${count.format(parsed.pairs)}通り(短期の日数が長期の日数より小さい組だけ)`
+            : "組み合わせの数は、入力を直すと表示します")}
+      </p>
+      <p className="text-[13px] leading-6 text-ink-3">
+        組み合わせごとに、選ぶ期間と検証期間を別々にバックテストします。
+        {maxPairs !== null && `このエンジンでは${count.format(maxPairs)}通りまで計算できます。`}
+        開始日より前のデータが長期の日数に足りないときは、すべての組み合わせを同じ日から比べるため、選ぶ期間の始まりを
+        {parsed.grid ? `長期${longestWindow(parsed.grid)}日` : "いちばん長い長期日数"}
+        のウォームアップがそろう日まで遅らせます。
+      </p>
+    </div>
+  );
+}
+
+/** 検証期間(アウトオブサンプル)の決め方。 */
+function HoldoutFields({
+  form,
+  error,
+  onChange,
+}: {
+  form: FormState;
+  error?: string;
+  onChange: (next: FormState) => void;
+}) {
+  const dateId = useId();
+  const choice = form.sweep.holdout;
+  const holdout = holdoutOf(form);
+  const setChoice = (next: HoldoutChoice) => {
+    // 「日付を指定」に切り替えたときは、いまの開始日を入れておく(そこから直せるように)
+    const current = holdoutOf(form);
+    const holdoutDate = next === "custom" && !form.sweep.holdout_date && current ? current : form.sweep.holdout_date;
+    onChange({ ...form, sweep: { ...form.sweep, holdout: next, holdout_date: holdoutDate } });
+  };
+  // 期間に対して決められない決め方(期間が1年以下のときの「最後の1年」など)は出さない
+  const usable = HOLDOUT_CHOICES.filter(
+    (c) => c.choice === "none" || c.choice === "custom" || c.choice === choice || validateHoldout(form, holdoutStart(form, c.choice, "")) === null,
+  );
+  const valid = holdout !== null && validateHoldout(form, holdout) === null;
+  return (
+    <Group
+      title="検証期間(アウトオブサンプル)"
+      note="期間の最後の部分を「検証期間」として取っておき、組み合わせを選ぶのには使いません。選んだ組み合わせが、選ぶのに使っていない期間でも通用するかを確かめるためです"
+    >
+      <div
+        role="group"
+        aria-label="検証期間の決め方"
+        // 誤りがあるときは、確認へ進もうとしたときにここへフォーカスを移し、誤りの文を読み上げる
+        aria-describedby={error ? `${dateId}-error` : undefined}
+        data-invalid-anchor={error && choice !== "custom" ? "true" : undefined}
+        tabIndex={error && choice !== "custom" ? -1 : undefined}
+        className="flex flex-wrap gap-2 outline-none"
+      >
+        {usable.map((c) => (
+          <Chip key={c.choice} active={choice === c.choice} onClick={() => setChoice(c.choice)}>
+            {c.label}
+          </Chip>
+        ))}
+      </div>
+      {choice === "custom" && (
+        <div className="mt-3 max-w-[20rem]">
+          <label htmlFor={dateId} className="block text-[14px] text-ink-2">
+            検証期間の開始日
+          </label>
+          <input
+            id={dateId}
+            type="date"
+            value={form.sweep.holdout_date}
+            min={form.start_date}
+            max={form.end_date}
+            onChange={(e) => onChange({ ...form, sweep: { ...form.sweep, holdout_date: e.target.value } })}
+            aria-invalid={Boolean(error)}
+            aria-describedby={error ? `${dateId}-error` : undefined}
+            className={`mt-1 w-full rounded-md border bg-surface px-3 py-2 tabular text-ink ${error ? "border-shu" : "border-field"}`}
+          />
+        </div>
+      )}
+      <FieldError id={`${dateId}-error`} message={error} />
+      <p className="mt-2 text-[13px] leading-6 text-ink-2">
+        {choice === "none"
+          ? "検証期間なし:期間全体で選びます。選んだ組み合わせが、ほかの期間でも通用するかは確かめられません"
+          : valid && holdout
+            ? `選ぶ期間 ${formatDate(form.start_date)}〜${formatDate(dayBefore(holdout))} ・ 検証期間 ${formatDate(holdout)}〜${formatDate(form.end_date)}`
+            : ""}
+      </p>
+    </Group>
   );
 }
 
@@ -258,6 +460,48 @@ function NumberField({
         {hint ? `${hint}。` : ""}
         {spec.help}
       </p>
+      <FieldError id={`${id}-error`} message={error} />
+    </div>
+  );
+}
+
+/** 総当たりの格子の小さな入力欄(見出しは「最小」など短く、読み上げでは「短期の日数の最小」と伝える)。 */
+function SmallNumberField({
+  label,
+  visibleLabel,
+  value,
+  unit,
+  error,
+  describedBy,
+  onChange,
+}: {
+  label: string;
+  visibleLabel: string;
+  value: string;
+  unit: string;
+  error?: string;
+  describedBy: string;
+  onChange: (value: string) => void;
+}) {
+  const id = useId();
+  return (
+    <div>
+      <label htmlFor={id} className="block text-[13px] text-ink-3">
+        <span aria-hidden="true">{visibleLabel}</span>
+        <span className="sr-only">{label}</span>
+      </label>
+      <div className="mt-1 flex items-center gap-1.5">
+        <input
+          id={id}
+          inputMode="numeric"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          aria-invalid={Boolean(error)}
+          aria-describedby={`${error ? `${id}-error ` : ""}${describedBy}`}
+          className={`w-full min-w-0 rounded-md border bg-surface px-2 py-2 text-right tabular text-ink ${error ? "border-shu" : "border-field"}`}
+        />
+        <span className="shrink-0 text-[14px] text-ink-2">{unit}</span>
+      </div>
       <FieldError id={`${id}-error`} message={error} />
     </div>
   );

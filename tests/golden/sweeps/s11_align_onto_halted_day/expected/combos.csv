@@ -1,0 +1,3 @@
+short_window,long_window,segment,total_return,annualized_return,max_drawdown,sharpe_ratio,win_rate,trade_count,winning_trades,return_count,insufficient_cash_count,final_equity,holding_days
+2,5,in_sample,0.0,0.0,0.0,,,0,0,2,0,1000000.0,0
+2,5,out_of_sample,-0.07005361659999887,-0.42653638021166573,0.08165374769324696,-3.825493277485271,0.0,5,0,32,0,929946.3834000011,22

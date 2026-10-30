@@ -68,14 +68,16 @@ data-check:
 # そこまでに合格するはずのケース・項目だけを比べる(CI も同じファイルを読む)。ファイルがなければ M6(すべて)
 UPTO ?= $(shell cat engine/cpp/MILESTONE 2>/dev/null || echo M6)
 
-# 正解データ(tests/golden)をリファレンス実装で作り直す
+# 正解データ(tests/golden。総当たりの tests/golden/sweeps も)をリファレンス実装で作り直す
 golden:
 	uv run python scripts/make_golden.py
+	uv run python scripts/make_golden_sweeps.py
 
 # C++ 版をビルドして、ゴールデンケースと比べる。マイルストーンを指定するなら make test-cpp UPTO=M3
+# 総当たりの sweep_cli(docs/gpu-plan.md の G2)があれば、総当たりの正解データとも比べる
 test-cpp: $(BUILD_DIR)/CMakeCache.txt
 	cmake --build $(BUILD_DIR)
-	BACKTEST_CPP_UPTO=$(UPTO) uv run pytest tests/python/test_golden.py -k cpp -v
+	BACKTEST_CPP_UPTO=$(UPTO) uv run pytest tests/python/test_golden.py tests/python/test_golden_sweep.py -k cpp -v
 
 # 1つのケースだけ C++ 版で動かして比べる。例: make cpp-case CASE=h01_round_trip
 cpp-case: $(BUILD_DIR)/CMakeCache.txt

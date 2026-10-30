@@ -49,6 +49,8 @@
   --ma-long: #0f8b74;
   --price: #4a5362;
   --seal-ink: #ffffff;
+  /* ヒートマップの中立の色(値が0)。紙・面と見分けられるグレー。プラスは朱、マイナスは藍と OKLab で混ぜる */
+  --heat-mid: #e3e7e3;
   color-scheme: light;
 }
 
@@ -71,6 +73,7 @@
     --ma-long: #24a084;
     --price: #b5bdc9;
     --seal-ink: #171b22;
+    --heat-mid: #2e343e;
     color-scheme: dark;
   }
 }
@@ -189,4 +192,60 @@ h3 {
     opacity: 1;
     transform: scale(1);
   }
+}
+
+/* 総当たりのヒートマップのマス(frontend/DESIGN.md「ヒートマップ」)。
+   - 1位:墨の太い枠。内側に面の色の細い枠を重ね、濃い朱・藍のマスの上でも枠と周りの差を 3:1 以上に保つ
+   - 選んだマス:中央に墨の点(面の色で縁取り)。フォーカス(キーボード):外側に墨の線。見た目で区別できるようにする */
+.heat-cell {
+  position: relative;
+  outline: none;
+}
+.heat-cell:hover {
+  box-shadow: inset 0 0 0 1px var(--ink-2);
+}
+.heat-cell[data-best="true"],
+.heat-legend-best {
+  box-shadow:
+    inset 0 0 0 2px var(--ink),
+    inset 0 0 0 3.5px var(--surface);
+}
+.heat-legend-best,
+.heat-legend-selected {
+  background: var(--heat-mid);
+}
+.heat-cell[aria-selected="true"]::after,
+.heat-legend-selected::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 9999px;
+  background: var(--ink);
+  box-shadow: 0 0 0 1.5px var(--surface);
+}
+.heat-cell:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+  z-index: 1;
+}
+/* 列が多くマスが細いとき(最小6px):内側の枠(左右で7px)だとマスの色が隠れるので、1位は外側に枠を描く。
+   選んだマスの点も小さくする */
+.heat-grid[data-size="tiny"] .heat-cell[data-best="true"] {
+  box-shadow: none;
+  outline: 2px solid var(--ink);
+  outline-offset: 0;
+  z-index: 1;
+}
+.heat-grid[data-size="tiny"] .heat-cell[data-best="true"]:focus-visible {
+  outline-offset: 2px; /* フォーカスしたときは、1位の枠と離して描く */
+}
+.heat-grid[data-size="tiny"] .heat-cell[aria-selected="true"]::after {
+  width: 4px;
+  height: 4px;
+  margin: -2px 0 0 -2px;
+  box-shadow: 0 0 0 1px var(--surface);
 }

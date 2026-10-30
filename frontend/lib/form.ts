@@ -4,47 +4,30 @@
 // メッセージは API(backend/api/validation.py)と同じ文にする。
 
 import type { ParamKey, Params, ParamSpec } from "./api.ts";
+import { numberText, toNumber } from "./numbers.ts";
+import { DEFAULT_SWEEP_FORM, type SweepFieldKey, type SweepForm } from "./sweep.ts";
+
+export { numberText, toNumber } from "./numbers.ts";
+
+/** 1組の日数で試す(single)か、日数の組み合わせを総当たりで比べる(sweep。docs/sweep.md)か */
+export type RunMode = "single" | "sweep";
 
 export type FormState = {
   start_date: string;
   end_date: string;
   params: Record<ParamKey, string>;
+  mode: RunMode;
+  /** 総当たりの格子と検証期間(mode が sweep のときに使う) */
+  sweep: SweepForm;
 };
 
-export type FieldErrors = Partial<Record<ParamKey | "start_date" | "end_date", string>>;
+export type FieldKey = ParamKey | "start_date" | "end_date" | SweepFieldKey;
+export type FieldErrors = Partial<Record<FieldKey, string>>;
 
 export function defaultForm(specs: ParamSpec[], range: { first_date: string; last_date: string }): FormState {
   const params = {} as Record<ParamKey, string>;
   for (const spec of specs) params[spec.key] = String(spec.default);
-  return { start_date: range.first_date, end_date: range.last_date, params };
-}
-
-// 受け付ける数値の形:符号・整数部・小数部・指数(1e6 など)。16進("0x10")や "Infinity" は受け付けない
-const NUMBER = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
-// カンマは3桁区切りの位置だけ(1,000,000)。「0,1」「1,5」「0,005」のような打ち間違いを、黙って別の数にしないため
-// (最初のまとまりは 0 で始まらない。「0,005」を 5 と読まない)
-const GROUPED = /^[+-]?[1-9]\d{0,2}(?:,\d{3})+(?:\.\d*)?$/;
-
-/**
- * 入力欄の文字を数値にする。読めなければ null。
- * 全角数字・全角カンマ・3桁区切りのカンマ(1,000,000)・前後の空白は受け付ける。
- * マイナスは "-" のほか、画面の表示に使っている「−」(U+2212)と全角の「-」も受け付ける。
- */
-export function toNumber(text: string): number | null {
-  let normalized = text.normalize("NFKC").replaceAll("−", "-").trim();
-  if (normalized.includes(",")) {
-    if (!GROUPED.test(normalized)) return null;
-    normalized = normalized.replaceAll(",", "");
-  }
-  if (!NUMBER.test(normalized)) return null;
-  const value = Number(normalized);
-  return Number.isFinite(value) ? value : null;
-}
-
-/** メッセージに入れる数値(1000000000 → "10億"、1000 → "1000")。API と同じ書き方。 */
-export function numberText(value: number): string {
-  if (value >= 1e8 && value % 1e8 === 0) return `${value / 1e8}億`;
-  return String(value);
+  return { start_date: range.first_date, end_date: range.last_date, params, mode: "single", sweep: { ...DEFAULT_SWEEP_FORM } };
 }
 
 function checkSpec(spec: ParamSpec, value: number): string | null {
@@ -72,10 +55,18 @@ function checkSpec(spec: ParamSpec, value: number): string | null {
   }
 }
 
-export function parseParams(form: FormState, specs: ParamSpec[]): { params: Params | null; errors: FieldErrors } {
+/**
+ * 条件の入力欄を数値にして確かめる。keys を渡すと、その項目だけを確かめる
+ * (総当たりでは日数を格子で決めるので、費用と資金だけを確かめる)。
+ */
+export function parseParams(
+  form: FormState,
+  specs: ParamSpec[],
+  keys?: readonly ParamKey[],
+): { params: Params | null; errors: FieldErrors } {
   const errors: FieldErrors = {};
   const values = {} as Params;
-  for (const spec of specs) {
+  for (const spec of keys ? specs.filter((s) => keys.includes(s.key)) : specs) {
     const value = toNumber(form.params[spec.key] ?? "");
     if (value === null) {
       errors[spec.key] = "数値で入力してください";
@@ -86,7 +77,8 @@ export function parseParams(form: FormState, specs: ParamSpec[]): { params: Para
     else values[spec.key] = value;
   }
   // 移動平均クロスだけの決まり:短期は長期より短くする
-  const hasWindows = specs.some((s) => s.key === "short_window") && specs.some((s) => s.key === "long_window");
+  const checked = (key: ParamKey) => specs.some((s) => s.key === key) && (!keys || keys.includes(key));
+  const hasWindows = checked("short_window") && checked("long_window");
   if (
     hasWindows &&
     !errors.short_window &&

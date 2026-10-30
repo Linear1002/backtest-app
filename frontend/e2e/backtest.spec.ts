@@ -116,6 +116,113 @@ async function runFromParamsExpectingError(page: Page) {
   await expect(page.getByRole("heading", { name: /条件を決める/ })).toBeVisible({ timeout: 30_000 });
 }
 
+test("総当たり:ヒートマップと検証期間の成績を見て、1マスを詳しく見る(docs/sweep.md)", async ({ page }) => {
+  await chooseSymbol(page, "ゆうなぎ", "1003");
+  await page.getByRole("radio", { name: /総当たりで比べる/ }).check();
+  // 組み合わせの数は、入力のたびにその場で出る
+  await expect(page.getByText(/組み合わせ:105通り/)).toBeVisible();
+  await page.getByLabel("短期の日数の刻み").fill("0");
+  await page.getByRole("button", { name: "確認へ進む", exact: true }).click();
+  await expect(page.getByText("日数と刻みは1以上の整数で入力してください")).toBeVisible();
+  await expect(page.getByLabel("短期の日数の刻み")).toBeFocused();
+  await page.getByLabel("短期の日数の刻み").fill("3");
+  await expectNoA11yViolations(page, "手順3(総当たりの条件)");
+
+  await page.getByRole("button", { name: "確認へ進む", exact: true }).click();
+  await expect(page.getByRole("heading", { name: /確認して総当たりを実行する/ })).toBeVisible();
+  await expect(page.getByRole("row", { name: /組み合わせ/ })).toContainText("105通り(計算は210回)");
+  await expectNoA11yViolations(page, "手順4(総当たりの確認)");
+  await page.getByRole("button", { name: /総当たりを実行/ }).click();
+  await expect(page.getByRole("heading", { name: "まとめ" })).toBeVisible({ timeout: 60_000 });
+
+  // まとめ:試した数、選ぶ期間の1位と、その検証期間での順位、順位相関(README・docs/interview.md に書いた数字)
+  const summary = page.getByRole("region", { name: "まとめ" });
+  await expect(summary).toContainText("105通り");
+  await expect(summary).toContainText("短期24日・長期30日");
+  await expect(summary).toContainText("検証期間では 105通り中 74位");
+  await expect(summary).toContainText("−0.17");
+  await expect(summary).toContainText("105通りで計算");
+  // データの初日から始めたので、選ぶ期間の始まりを長期120日のウォームアップがそろう日までそろえた(docs/sweep.md 3章)
+  await expect(page.getByText(/120営業日は、移動平均を作るため/)).toBeVisible();
+  await expectNoA11yViolations(page, "手順5(総当たりの結果)");
+
+  // ヒートマップはキーボードで動いて選べる(1位のマスから右へ1つ = 長期40日)
+  const current = page.getByRole("grid").locator('[role=gridcell][tabindex="0"]');
+  await expect(current).toHaveAttribute("aria-label", /短期24日・長期30日.*選ぶ期間の1位/);
+  await current.focus();
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("heading", { name: /選んだ組み合わせ:短期24日・長期40日/ })).toBeVisible();
+  // 色を付ける期間を検証期間に切り替えると、「確かめるためのもの」と出る
+  await page.getByRole("button", { name: "検証期間", exact: true }).click();
+  await expect(page.getByRole("grid")).toHaveAttribute("aria-label", /検証期間/);
+  await expect(page.getByText(/検証期間の色は、選ぶ期間で選んだ組み合わせを/)).toBeVisible();
+
+  // 検証期間だけで詳しく見る → 確認の画面から、総当たりの結果に戻る(見方はそのまま)
+  await page.getByRole("button", { name: "検証期間で詳しく見る" }).click();
+  await expect(page.getByRole("heading", { name: /確認して実行する/ })).toBeVisible();
+  await expect(page.getByRole("row", { name: /期間/ }).first()).toContainText("2025/03/17〜2026/07/31");
+  await expect(page.getByText(/総当たり\(105通り\)の中から選んだ組み合わせを、検証期間/)).toBeVisible();
+  await page.getByRole("button", { name: "総当たりの結果に戻る" }).click();
+  await expect(page.getByRole("heading", { name: /選んだ組み合わせ:短期24日・長期40日/ })).toBeVisible();
+  await expect(page.getByRole("grid")).toHaveAttribute("aria-label", /検証期間/);
+
+  // 選ぶ期間だけで詳しく見て実行すると、総リターンは総当たりの表の値と同じになる
+  const detail = page.getByRole("table", { name: "選んだ組み合わせの、期間ごとの成績" });
+  const sweepReturn = (await detail.getByRole("row", { name: /^総リターン/ }).getByRole("cell").first().innerText()).trim();
+  await page.getByRole("button", { name: /選ぶ期間で詳しく見る/ }).click();
+  await expect(page.getByRole("row", { name: /短期移動平均/ })).toContainText("24日");
+  await expect(page.getByRole("row", { name: /長期移動平均/ })).toContainText("40日");
+  await page.getByRole("button", { name: /バックテストを実行/ }).click();
+  await expect(page.getByRole("heading", { name: "成績表" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(/総当たり\(105通り\)の中から選んだ組み合わせを、選ぶ期間/)).toBeVisible();
+  const metrics = page.getByRole("region", { name: "成績表" });
+  await expect(metrics.getByText(sweepReturn, { exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: "総当たりの結果に戻る" }).click();
+  await expect(page.getByRole("heading", { name: "まとめ" })).toBeVisible();
+});
+
+test("総当たり:列の多い格子でも、ページは横にはみ出さず、ヒートマップだけが横にスクロールする @mobile", async ({ page }) => {
+  await chooseSymbol(page, "1001", "1001");
+  await page.getByRole("radio", { name: /総当たりで比べる/ }).check();
+  // 短期2〜3日 × 長期10〜130日(2日ごと)= 61列 × 2行 = 122通り。検証期間は使わない
+  for (const [label, value] of [
+    ["短期の日数の最小", "2"],
+    ["短期の日数の最大", "3"],
+    ["短期の日数の刻み", "1"],
+    ["長期の日数の最小", "10"],
+    ["長期の日数の最大", "130"],
+    ["長期の日数の刻み", "2"],
+  ] as const) {
+    await page.getByLabel(label).fill(value);
+  }
+  await page.getByRole("group", { name: "検証期間の決め方" }).getByRole("button", { name: "使わない" }).click();
+  await expect(page.getByText(/組み合わせ:122通り/)).toBeVisible();
+  await page.getByRole("button", { name: "確認へ進む", exact: true }).click();
+  await page.getByRole("button", { name: /総当たりを実行/ }).click();
+  await expect(page.getByRole("heading", { name: "まとめ" })).toBeVisible({ timeout: 60_000 });
+
+  const grid = page.getByRole("grid");
+  await expect(grid).toHaveAttribute("data-size", "tiny");
+  // ページ全体は横にはみ出さない。はみ出す分は、ヒートマップの枠の中だけでスクロールする
+  const pageOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(pageOverflow).toBeLessThanOrEqual(0);
+  const scroller = grid.locator("xpath=..");
+  const sizes = await scroller.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+  expect(sizes.scroll).toBeGreaterThan(sizes.client);
+  // マスは細くなりすぎない(最小6px)
+  const cellWidth = await grid.locator("[role=gridcell]").first().evaluate((el) => el.getBoundingClientRect().width);
+  expect(cellWidth).toBeGreaterThanOrEqual(6);
+
+  // キーボードで右端の列へ動くと、そのマスが見えるところまで枠の中がスクロールする
+  const current = grid.locator('[role=gridcell][tabindex="0"]');
+  await current.focus();
+  await page.keyboard.press("End");
+  await expect(page.locator(":focus")).toHaveAttribute("aria-label", /長期130日/);
+  expect(await scroller.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
+  await expectNoA11yViolations(page, "列の多い総当たりの結果(スマートフォン)");
+});
+
 test("スマートフォンの幅でも、取引の記録が読める @mobile", async ({ page }) => {
   await chooseSymbol(page, "あさつゆ", "1004");
   await runFromParams(page);

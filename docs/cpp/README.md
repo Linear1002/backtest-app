@@ -445,4 +445,5 @@ BACKTEST_CPP_CLI=build-debug/engine/cpp/backtest_cli make test-cpp
 ## このガイドを終えたら
 
 - 面接で話せるようになること:`docs/interview.md`
-- 次は GPU:`docs/gpu-plan.md`(パラメータの総当たりを CUDA で並列にする)
+- 次は総当たりと GPU:`docs/gpu-plan.md`(パラメータの総当たりを C++ の複数スレッド → CUDA で並列にする)。
+  総当たりの仕様と答え合わせのファイルの形は `docs/sweep.md`(11章)。`build/engine/cpp/sweep_cli` を作ると、`make test-cpp` が総当たりの正解データ(24ケース)とも比べる

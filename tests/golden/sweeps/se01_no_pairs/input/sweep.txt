@@ -1,0 +1,14 @@
+start=2022-01-04
+end=2026-07-31
+holdout_start=
+short_min=10
+short_max=20
+short_step=5
+long_min=5
+long_max=10
+long_step=5
+fee_rate=0.001
+slippage_rate=0.0005
+initial_cash=1000000.0
+lot_size=100
+trading_days_per_year=245

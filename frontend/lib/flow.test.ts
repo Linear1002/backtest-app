@@ -3,19 +3,25 @@ import { test } from "node:test";
 
 import { ApiError } from "./api.ts";
 import {
+  canShowSweep,
   canVisit,
   currentRequest,
+  currentSweepRequest,
   fieldErrorsFrom,
   flowReducer,
   initialFlow,
   needsSymbolLoad,
   resultIsOutdated,
+  inspectedOrigin,
   runErrorMessage,
+  sameCalculationAsSweep,
+  showSweepReplacesInput,
   unplacedErrorMessage,
   type FlowAction,
   type FlowState,
 } from "./flow.ts";
-import { detail, META, result, STRATEGIES, symbol } from "./testing.ts";
+import type { SweepForm } from "./sweep.ts";
+import { detail, META, result, STRATEGIES, sweepResult, symbol } from "./testing.ts";
 
 function run(actions: FlowAction[], start: FlowState = initialFlow): FlowState {
   return actions.reduce(flowReducer, start);
@@ -243,7 +249,7 @@ test("実行中は手順も条件も変えられず、二重に実行しない",
     { type: "selectStrategy", id: "rsi_reversal" },
     { type: "submitParams" },
     { type: "advance" },
-    { type: "runStarted", id: 8, request: running.running!.request },
+    { type: "runStarted", id: 8, request: currentRequest(atConfirm())! },
   ];
   for (const action of blocked) assert.equal(flowReducer(running, action), running, action.type);
 });
@@ -430,4 +436,289 @@ test("使えない戦略では先に進めず、手順の表示からも条件�
   assert.equal(canVisit(switched, 4), false);
   assert.equal(currentRequest(switched), null);
   assert.equal(flowReducer(switched, { type: "goTo", step: 4 }).step, 2);
+});
+
+// --- 総当たり(docs/sweep.md) -----------------------------------------------------------
+
+function sweepMode(state: FlowState = atParams()): FlowState {
+  return flowReducer(state, { type: "setMode", mode: "sweep" });
+}
+
+function editSweep(state: FlowState, changes: Partial<SweepForm>): FlowState {
+  const form = state.form!;
+  return flowReducer(state, { type: "editForm", form: { ...form, sweep: { ...form.sweep, ...changes } } });
+}
+
+/** 総当たりを始めた状態(番号 id)。 */
+function sweepStarted(state: FlowState, id: number): FlowState {
+  const request = currentSweepRequest(state);
+  assert.ok(request, "総当たりを実行できる条件のはず");
+  return flowReducer(state, { type: "sweepStarted", id, request });
+}
+
+/** 総当たりの結果(手順5)まで進んだ状態。 */
+function atSweepResult(): FlowState {
+  const confirm = flowReducer(sweepMode(), { type: "submitParams" });
+  const running = sweepStarted(confirm, 11);
+  return flowReducer(running, { type: "sweepSucceeded", id: 11, result: sweepResult("DEMO:1001"), elapsedMs: 1700 });
+}
+
+test("総当たりに切り替えると、1組のリクエストではなく総当たりのリクエストになる", () => {
+  const s = sweepMode();
+  assert.equal(currentRequest(s), null);
+  // 期間 2024-01-04〜2025-12-30(726日)の最後の3割:開始日から round(726 × 0.7) = 508 日後
+  assert.deepEqual(currentSweepRequest(s), {
+    symbol_id: "DEMO:1001",
+    strategy_id: "ma_cross",
+    engine: "python",
+    start_date: "2024-01-04",
+    end_date: "2025-12-30",
+    holdout_start_date: "2025-05-26",
+    grid: { short_min: 3, short_max: 30, short_step: 3, long_min: 20, long_max: 120, long_step: 10 },
+    params: { fee_rate_pct: 0.1, slippage_rate_pct: 0.05, initial_cash: 1_000_000 },
+  });
+  // 日数の欄(1組で試すときの欄)が誤っていても、総当たりには関係ない
+  const odd = edit(s, { short_window: "abc" });
+  assert.ok(currentSweepRequest(odd));
+  assert.equal(flowReducer(odd, { type: "submitParams" }).step, 4);
+  // 検証期間なし
+  assert.equal(currentSweepRequest(editSweep(s, { holdout: "none" }))?.holdout_start_date, null);
+});
+
+test("総当たりの入力の誤りは、その欄に出て確認へ進めない(組み合わせの数の上限はエンジンごと)", () => {
+  const bad = flowReducer(editSweep(sweepMode(), { short_min: "0" }), { type: "submitParams" });
+  assert.equal(bad.step, 3);
+  assert.equal(bad.fieldErrors.short_min, "日数と刻みは1以上の整数で入力してください");
+  assert.equal(bad.focus.target, "error");
+
+  const many = editSweep(sweepMode(), { short_min: "1", short_max: "100", short_step: "1", long_min: "2", long_max: "200", long_step: "1" });
+  const tooMany = flowReducer(many, { type: "submitParams" });
+  assert.ok(tooMany.fieldErrors.grid?.startsWith("組み合わせが多すぎます(14,950通り)。このエンジンでは2,000通りまで"));
+
+  const early = flowReducer(editSweep(sweepMode(), { holdout: "custom", holdout_date: "2023-01-01" }), { type: "submitParams" });
+  assert.equal(early.fieldErrors.holdout_start_date, "検証期間の開始日は、期間の開始日より後、終了日以前の日付にしてください");
+});
+
+test("格子の誤りも、相手の欄を直したら消える(最小 > 最大、組み合わせがない)", () => {
+  const reversed = flowReducer(editSweep(sweepMode(), { short_min: "40", short_max: "30" }), { type: "submitParams" });
+  assert.equal(reversed.fieldErrors.short_min, "短期の日数の範囲は、最小を最大以下にしてください");
+  assert.equal(editSweep(reversed, { short_max: "50" }).fieldErrors.short_min, undefined);
+
+  const none = flowReducer(editSweep(sweepMode(), { short_min: "150", short_max: "160" }), { type: "submitParams" });
+  assert.match(none.fieldErrors.grid ?? "", /組み合わせがありません/);
+  assert.equal(editSweep(none, { long_max: "200" }).fieldErrors.grid, undefined);
+  // まだ組み合わせがなければ残る
+  assert.ok(editSweep(none, { long_max: "130" }).fieldErrors.grid);
+});
+
+test("総当たりの実行:途中経過 → 結果の画面。条件を変えたら前の結果には戻れない", () => {
+  const confirm = flowReducer(sweepMode(), { type: "submitParams" });
+  assert.equal(confirm.step, 4);
+  const running = sweepStarted(confirm, 11);
+  assert.equal(running.running?.kind, "sweep");
+  const progress = flowReducer(running, { type: "sweepProgress", id: 11, jobId: "job-1", done: 40, total: 105 });
+  assert.deepEqual(
+    progress.running && progress.running.kind === "sweep" && [progress.running.jobId, progress.running.done, progress.running.total],
+    ["job-1", 40, 105],
+  );
+  // 番号の違う応答・1組の応答は捨てる
+  assert.equal(flowReducer(progress, { type: "sweepProgress", id: 99, jobId: "x", done: 1, total: 1 }), progress);
+  assert.equal(flowReducer(progress, { type: "runSucceeded", id: 11, result: result("DEMO:1001") }), progress);
+  const done = flowReducer(progress, { type: "sweepSucceeded", id: 11, result: sweepResult("DEMO:1001"), elapsedMs: 1700 });
+  assert.equal(done.step, 5);
+  assert.equal(done.running, null);
+  assert.equal(done.lastSweep?.elapsedMs, 1700);
+  assert.ok(canVisit(done, 5));
+  const changed = editSweep(done, { long_step: "20" });
+  assert.equal(canVisit(changed, 5), false);
+  assert.ok(resultIsOutdated(changed));
+  assert.ok(canVisit(editSweep(changed, { long_step: "10" }), 5));
+});
+
+test("1組の結果と総当たりの結果は別々に覚えていて、切り替えるとそれぞれに戻れる", () => {
+  const single = atResult();
+  const sweep = atSweepResultFrom(single);
+  assert.equal(sweep.last?.id, 2);
+  assert.equal(sweep.lastSweep?.id, 12);
+  const backToSingle = flowReducer(sweep, { type: "setMode", mode: "single" });
+  assert.ok(canVisit(backToSingle, 5));
+  assert.ok(canVisit(flowReducer(backToSingle, { type: "setMode", mode: "sweep" }), 5));
+});
+
+function atSweepResultFrom(state: FlowState): FlowState {
+  const sweep = flowReducer(flowReducer(state, { type: "goTo", step: 3 }), { type: "setMode", mode: "sweep" });
+  const confirm = flowReducer(sweep, { type: "submitParams" });
+  const running = sweepStarted(confirm, 12);
+  return flowReducer(running, { type: "sweepSucceeded", id: 12, result: sweepResult("DEMO:1001"), elapsedMs: 10 });
+}
+
+test("総当たりの1マスを詳しく見る:その期間だけの1組にして確認の画面へ(数字は総当たりのその行と同じ計算)", () => {
+  const sweep = atSweepResult();
+  const inspect = flowReducer(sweep, { type: "inspectCombo", short: 6, long: 20, segment: "in_sample" });
+  assert.equal(inspect.step, 4);
+  assert.equal(inspect.form?.mode, "single");
+  const request = currentRequest(inspect)!;
+  assert.deepEqual([request.params.short_window, request.params.long_window], [6, 20]);
+  // 選ぶ期間(始まりをそろえたあとの日)〜 検証期間の前日
+  assert.deepEqual([request.start_date, request.end_date], ["2024-02-01", "2025-06-30"]);
+  assert.deepEqual(inspectedOrigin(inspect), {
+    sweepId: sweep.lastSweep!.id,
+    segment: sweep.lastSweep!.result.segments[0],
+    trials: 4,
+    hasHoldout: true,
+    engine: "python",
+    fetchedAt: null,
+  });
+  const oosState = flowReducer(sweep, { type: "inspectCombo", short: 6, long: 20, segment: "out_of_sample" });
+  const oos = currentRequest(oosState)!;
+  assert.deepEqual([oos.start_date, oos.end_date], ["2025-07-01", "2025-12-30"]);
+  assert.equal(inspectedOrigin(oosState)?.segment.name, "out_of_sample");
+  // 条件を1つでも変えたら、総当たりの中から選んだものではなくなる(元に戻せば、また出どころが付く)
+  const changed = edit(inspect, { short_window: "7" });
+  assert.equal(inspectedOrigin(changed), null);
+  assert.ok(inspectedOrigin(edit(changed, { short_window: "6" })));
+});
+
+test("詳しく見た1組を実行すると、結果に出どころが付く。自分で同じ条件を入れただけの結果には付かない", () => {
+  const sweep = atSweepResult();
+  const inspect = flowReducer(sweep, { type: "inspectCombo", short: 6, long: 20, segment: "in_sample" });
+  const done = flowReducer(started(inspect, 30), { type: "runSucceeded", id: 30, result: result("DEMO:1001") });
+  assert.equal(done.last?.origin?.sweepId, sweep.lastSweep!.id);
+  assert.equal(done.last?.origin?.segment.name, "in_sample");
+
+  // 総当たりの前に、自分で同じ日数・期間を入れて実行した結果には付けない
+  const manual = flowReducer(flowReducer(flowReducer(sweep, { type: "goTo", step: 3 }), { type: "setMode", mode: "single" }), {
+    type: "editForm",
+    form: { ...sweep.form!, mode: "single", start_date: "2024-02-01", end_date: "2025-06-30", params: { ...sweep.form!.params, short_window: "6", long_window: "20" } },
+  });
+  assert.equal(inspectedOrigin(manual), null);
+  const manualDone = flowReducer(started(flowReducer(manual, { type: "submitParams" }), 31), {
+    type: "runSucceeded",
+    id: 31,
+    result: result("DEMO:1001"),
+  });
+  assert.equal(manualDone.last?.origin, null);
+  // 「総当たりの結果に戻る」と入力が置き換わることを、ボタンのそばに書く
+  assert.ok(showSweepReplacesInput(manualDone));
+  assert.equal(showSweepReplacesInput(done), false);
+  assert.equal(showSweepReplacesInput(inspect), false);
+});
+
+test("総当たりと同じ計算と言えるのは、同じエンジン・同じデータの取得日時のときだけ", () => {
+  const inspect = flowReducer(atSweepResult(), { type: "inspectCombo", short: 6, long: 20, segment: "in_sample" });
+  // 確認の画面でエンジンを変えても、出どころは残る(数字が同じとは言わない)
+  const otherEngine = flowReducer(inspect, { type: "selectEngine", id: "cpp" });
+  const origin = inspectedOrigin(otherEngine)!;
+  assert.ok(origin);
+  assert.equal(sameCalculationAsSweep(origin, "python"), true);
+  assert.equal(sameCalculationAsSweep(origin, "cpp"), false);
+  // 結果のデータを取り直していたら(取得日時が違う)、同じ計算とは言わない
+  assert.equal(sameCalculationAsSweep(origin, "python", null), true);
+  assert.equal(sameCalculationAsSweep(origin, "python", "2026-10-25T00:00:00Z"), false);
+});
+
+test("新しい総当たりを実行したら、前の総当たりの「詳しく見る」の出どころは忘れる", () => {
+  const inspect = flowReducer(atSweepResult(), { type: "inspectCombo", short: 6, long: 20, segment: "in_sample" });
+  assert.ok(inspect.inspected);
+  const again = flowReducer(flowReducer(flowReducer(inspect, { type: "showSweep" }), { type: "goTo", step: 4 }), {
+    type: "sweepStarted",
+    id: 40,
+    request: currentSweepRequest(flowReducer(flowReducer(inspect, { type: "showSweep" }), { type: "goTo", step: 4 }))!,
+  });
+  const done = flowReducer(again, { type: "sweepSucceeded", id: 40, result: sweepResult("DEMO:1001"), elapsedMs: 5 });
+  assert.equal(done.inspected, null);
+});
+
+test("1組の結果から総当たりの結果に戻る:同じ手順5でも見出しにフォーカスを移し、総当たりのエンジンも戻す", () => {
+  const inspect = flowReducer(atSweepResult(), { type: "inspectCombo", short: 6, long: 20, segment: "in_sample" });
+  const done = flowReducer(started(inspect, 30), { type: "runSucceeded", id: 30, result: result("DEMO:1001") });
+  assert.equal(done.step, 5);
+  // 1組に切り替えている間に、総当たりのエンジンが変わっていても
+  const otherEngine = { ...done, sweepEngine: "cuda" };
+  const back = flowReducer(otherEngine, { type: "showSweep" });
+  assert.equal(back.step, 5);
+  assert.equal(back.form?.mode, "sweep");
+  assert.equal(back.sweepEngine, "python");
+  assert.ok(canVisit(back, 5));
+  assert.equal(back.focus.target, "heading");
+  assert.ok(back.focus.seq > done.focus.seq);
+});
+
+test("総当たりの結果に戻る:確認の画面からも戻れて、総当たりを実行したときの条件と画面の見方に戻る", () => {
+  const sweep = atSweepResult();
+  assert.equal(sweep.sweepView.selected, 3); // 新しい結果は、シャープレシオの1位を選んだところから
+  const viewed = flowReducer(sweep, { type: "sweepView", view: { objective: "total_return", segment: "out_of_sample", selected: 1 } });
+  const inspect = flowReducer(viewed, { type: "inspectCombo", short: 3, long: 20, segment: "out_of_sample" });
+  // 確認の画面で、費用まで変えてから戻っても
+  const changed = edit(inspect, { fee_rate_pct: "0.2" });
+  assert.ok(canShowSweep(changed));
+  const back = flowReducer(changed, { type: "showSweep" });
+  assert.equal(back.step, 5);
+  assert.deepEqual(back.form, sweep.lastSweep!.form); // 総当たりを実行したときの入力欄
+  assert.ok(canVisit(back, 5));
+  assert.deepEqual(back.sweepView, { objective: "total_return", segment: "out_of_sample", selected: 1 });
+  // 実行中・総当たりの結果がないときは戻れない
+  assert.equal(canShowSweep(atResult()), false);
+});
+
+test("総当たりを中止すると、確認の画面のまま知らせを出す。入力を変えたら知らせは消える", () => {
+  const running = sweepStarted(flowReducer(sweepMode(), { type: "submitParams" }), 13);
+  const cancelled = flowReducer(running, { type: "sweepCancelled", id: 13 });
+  assert.equal(cancelled.running, null);
+  assert.equal(cancelled.step, 4);
+  assert.equal(cancelled.sweepCancelled, true);
+  assert.equal(cancelled.runError, null);
+  // 押した「中止する」は消えるので、知らせにフォーカスを移す
+  assert.equal(cancelled.focus.target, "notice");
+  assert.ok(cancelled.focus.seq > running.focus.seq);
+  assert.equal(editSweep(cancelled, { short_step: "3" }).sweepCancelled, false);
+});
+
+test("総当たりの実行中は、切り替え・詳しく見る・エンジンの変更を受け付けない", () => {
+  const running = sweepStarted(flowReducer(sweepMode(), { type: "submitParams" }), 14);
+  for (const action of [
+    { type: "setMode", mode: "single" },
+    { type: "inspectCombo", short: 3, long: 20, segment: "in_sample" },
+    { type: "showSweep" },
+    { type: "selectSweepEngine", id: "cuda" },
+    { type: "goTo", step: 3 },
+  ] as FlowAction[]) {
+    assert.equal(flowReducer(running, action), running, action.type);
+  }
+  // 1組の実行も始めない
+  assert.equal(currentRequest(running), null);
+});
+
+test("総当たりの失敗:欄に出せる誤りは条件の画面のその欄へ、ほかは確認の画面に文で出す", () => {
+  const running = sweepStarted(flowReducer(sweepMode(), { type: "submitParams" }), 15);
+  const field = flowReducer(running, {
+    type: "sweepFailed",
+    id: 15,
+    message: null,
+    fieldErrors: { holdout_start_date: "検証期間の営業日が3日未満です。検証期間の開始日を早くしてください" },
+  });
+  assert.equal(field.step, 3);
+  assert.match(field.fieldErrors.holdout_start_date ?? "", /検証期間の営業日/);
+  const other = flowReducer(running, { type: "sweepFailed", id: 15, message: "データに異常があるため計算できません", fieldErrors: {} });
+  assert.equal(other.step, 4);
+  assert.equal(other.runError, "データに異常があるため計算できません");
+});
+
+test("総当たりの API のエラーの振り分け:格子・検証期間・費用の欄は欄に、エンジンなどは文に", () => {
+  const request = currentSweepRequest(sweepMode())!;
+  const error = new ApiError(422, "入力内容を確認してください", [
+    { field: "short_min", message: "日数と刻みは1以上の整数で入力してください" },
+    { field: "grid", message: "組み合わせが多すぎます" },
+    { field: "holdout_start_date", message: "検証期間の営業日が3日未満です" },
+    { field: "fee_rate_pct", message: "手数料率とスリッページ率は0以上で入力してください" },
+    { field: "engine", message: "総当たりでは CUDA 版はまだ使えません" },
+  ]);
+  assert.deepEqual(Object.keys(fieldErrorsFrom(error, request)).sort(), ["fee_rate_pct", "grid", "holdout_start_date", "short_min"]);
+  assert.equal(unplacedErrorMessage(error, request), "入力内容を確認してください(総当たりでは CUDA 版はまだ使えません)");
+  assert.equal(runErrorMessage(new Error("boom"), request, "総当たりを実行できませんでした"), "総当たりを実行できませんでした。ページを再読み込みして、もう一度試してください");
+});
+
+test("総当たりのエンジンが使えないものなら、一覧を受け取ったときに使えるものにする", () => {
+  const s = flowReducer({ ...initialFlow, sweepEngine: "cuda" }, loaded);
+  assert.equal(s.sweepEngine, "python");
 });
