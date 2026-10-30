@@ -187,25 +187,26 @@ def test_skipped_days_count_only_trading_days() -> None:
     """そろえるために飛ばした日数は、有効日だけを数える(1組のウォームアップの表示 docs/mvp.md 4.1 と同じ)。"""
     from backend.api.sweep_convert import segments_out
     from backend.marketdata.models import DailyBar
-    from engine.reference.sweep import IN_SAMPLE, OUT_OF_SAMPLE, Segment
+    from engine.reference.benchmark import run_buy_and_hold
+    from engine.reference.sweep import IN_SAMPLE, OUT_OF_SAMPLE, Segment, SweepCosts
 
     def bar(day: int, close: float | None) -> DailyBar:
         return DailyBar(dt.date(2025, 3, day), close, close, close, close, 1.0, 1.0, 1.0, None)
 
-    # 3日・4日・5日は有効日、6日は売買不成立、7日から選ぶ期間
-    bars = [
-        bar(3, 100.0),
-        bar(4, 101.0),
-        bar(5, 102.0),
-        bar(6, None),
-        bar(7, 103.0),
-        bar(10, 104.0),
-    ]
+    # 3日・4日・5日は有効日、6日は売買不成立。7日から選ぶ期間、12日から検証期間
+    closes = {3: 100.0, 4: 101.0, 5: 102.0, 6: None, 7: 103.0, 10: 104.0, 11: 105.0}
+    closes |= {12: 106.0, 13: 107.0, 14: 108.0}
+    bars = [bar(day, close) for day, close in closes.items()]
     segments = (
-        Segment(IN_SAMPLE, dt.date(2025, 3, 7), dt.date(2025, 3, 7)),
-        Segment(OUT_OF_SAMPLE, dt.date(2025, 3, 10), dt.date(2025, 3, 10)),
+        Segment(IN_SAMPLE, dt.date(2025, 3, 7), dt.date(2025, 3, 11)),
+        Segment(OUT_OF_SAMPLE, dt.date(2025, 3, 12), dt.date(2025, 3, 14)),
     )
-    in_sample, out_of_sample = segments_out(segments, bars, dt.date(2025, 3, 3))
+    params = SweepCosts(fee_rate=0.001, slippage_rate=0.0005, initial_cash=1_000_000.0).params_for(
+        1, 2
+    )
+    engine_bars = to_engine_bars(bars)
+    benchmarks = [run_buy_and_hold(engine_bars, s.start, s.end, params) for s in segments]
+    in_sample, out_of_sample = segments_out(segments, bars, dt.date(2025, 3, 3), benchmarks)
     assert in_sample.requested_start_date == dt.date(2025, 3, 3)
     assert in_sample.skipped_trading_days == 3  # 6日(売買不成立)は数えない
     assert out_of_sample.skipped_trading_days == 0

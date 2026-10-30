@@ -53,6 +53,17 @@ test("銘柄を選んで結果まで進め、分割をまたいだ取引も正�
   await expect(page.getByRole("table", { name: "買いから売りまでの取引の一覧" })).toContainText("100株 → 200株");
   await expect(page.getByRole("heading", { name: "分割・併合の処理" })).toBeVisible();
   await expect(page.getByText(/架空データです/)).toBeVisible();
+  // 比較の基準:同じ期間・同じ費用の買い持ち(docs/benchmark.md)。DEMO:1003 は買い持ちのほうが良かった
+  const compare = page.getByText("比べると:同じ期間の買い持ちなら");
+  await expect(compare).toBeVisible();
+  // 計算書の行の中で確かめる(同じ金額がチャートの読み取り欄にも出るため)
+  await expect(compare.locator("xpath=..")).toContainText("2,779,717円(+177.97%)");
+  await expect(page.getByText("買い持ちより 98.9ポイント下")).toBeVisible();
+  // 成績表にも買い持ちの値(最大ドローダウンは買い持ちのほうが大きい)
+  const metricsTable = page.getByRole("region", { name: "成績表" });
+  await expect(metricsTable).toContainText("買い持ち +177.97%");
+  await expect(metricsTable).toContainText("買い持ち 40.98%");
+  await expect(page.getByText("買い持ちの資産額(比較)")).toBeVisible();
   await expectNoA11yViolations(page, "手順5(結果)");
 
   // チャートはスライダーとして、キーボードで日付を動かせる
@@ -63,6 +74,13 @@ test("銘柄を選んで結果まで進め、分割をまたいだ取引も正�
   await expect(chart).toHaveAttribute("aria-valuetext", /^2022年1月4日/);
   await page.keyboard.press("Shift+ArrowRight");
   await expect(chart).toHaveAttribute("aria-valuenow", "20");
+
+  // 日々の数値の表(買い持ちの資産額の列もある)。スクロールする枠は、キーボードでもスクロールできるようにフォーカスを受け取る
+  // (1,000行を超える表なので、役割での検索や axe はページ全体では重い。属性で確かめる)
+  await page.getByRole("button", { name: /日々の数値を表で見る/ }).click();
+  const daily = page.locator('[role="region"][aria-label="日々の数値の表"]');
+  await expect(daily).toHaveAttribute("tabindex", "0");
+  await expect(daily.locator("thead")).toContainText("買い持ちの資産額");
 });
 
 test("入力の誤りはその欄に出て、確認へ進めない", async ({ page }) => {
@@ -142,6 +160,12 @@ test("総当たり:ヒートマップと検証期間の成績を見て、1マス
   await expect(summary).toContainText("検証期間では 105通り中 74位");
   await expect(summary).toContainText("−0.17");
   await expect(summary).toContainText("105通りで計算");
+  // 買い持ちと比べる(選ぶ期間と検証期間それぞれ)
+  await expect(summary).toContainText("買い持ち(比較)");
+  await expect(summary).toContainText("買い持ちより良かった組み合わせ");
+  // README・docs/interview.md に書いた数字:1位は検証期間で買い持ち(1.25)より悪く、検証期間で買い持ちを上回ったのは35通り
+  await expect(summary).toContainText("同じ期間の買い持ち(1.25)より悪い");
+  await expect(summary).toContainText("105通り中 35通り");
   // データの初日から始めたので、選ぶ期間の始まりを長期120日のウォームアップがそろう日までそろえた(docs/sweep.md 3章)
   await expect(page.getByText(/120営業日は、移動平均を作るため/)).toBeVisible();
   await expectNoA11yViolations(page, "手順5(総当たりの結果)");
@@ -221,6 +245,15 @@ test("総当たり:列の多い格子でも、ページは横にはみ出さず�
   await expect(page.locator(":focus")).toHaveAttribute("aria-label", /長期130日/);
   expect(await scroller.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
   await expectNoA11yViolations(page, "列の多い総当たりの結果(スマートフォン)");
+});
+
+test("買い持ちを買えないときは比べない(docs/benchmark.md 3章)", async ({ page }) => {
+  // DEMO:1009 は株価が高く、100万円では100株を買えない
+  await chooseSymbol(page, "1009", "1009");
+  await runFromParams(page);
+  await expect(page.getByText(/比べると:買い持ちは、初期資金が100株分\(手数料込みで約/)).toBeVisible();
+  await expect(page.getByText("買い持ちの資産額(比較)")).toHaveCount(0); // チャートの凡例に出さない
+  await expect(page.getByRole("region", { name: "成績表" })).not.toContainText("買い持ち");
 });
 
 test("スマートフォンの幅でも、取引の記録が読める @mobile", async ({ page }) => {

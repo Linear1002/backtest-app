@@ -43,6 +43,7 @@ from backend.marketdata.service import MarketDataService
 from backend.strategies import STRATEGIES, STRATEGIES_BY_ID
 from backend.sweeps import INTERNAL_ERROR as SWEEP_INTERNAL_ERROR
 from backend.sweeps import SweepJob, SweepJobs, SweepSpec
+from engine.reference.benchmark import run_buy_and_hold
 from engine.reference.sweep import InSampleTooShortError, SweepRow, validate_sweep
 from engine.reference.types import TRADING_DAYS_PER_YEAR
 
@@ -185,9 +186,12 @@ def run_backtest_endpoint(body: BacktestRequest, service: Service) -> BacktestOu
     data = service.load(sid)  # 日足・範囲・出どころを1回の読み込みから作る
     period = validate_period(body.start_date, body.end_date, data.available, data.bars)
 
+    bars = convert.to_engine_bars(data.bars)
     started = time.perf_counter()
-    result = run(convert.to_engine_bars(data.bars), period.start, period.end, params)
+    result = run(bars, period.start, period.end, params)
     elapsed_ms = (time.perf_counter() - started) * 1000
+    # 比較の基準:同じ期間・同じ費用の買い持ち(docs/benchmark.md)。エンジンにかかわらず Python で計算する
+    benchmark = run_buy_and_hold(bars, period.start, period.end, params)
 
     first_day, last_day = result.daily[0].date, result.daily[-1].date
     engine_info = next(e for e in list_engines() if e.id == body.engine)
@@ -219,13 +223,14 @@ def run_backtest_endpoint(body: BacktestRequest, service: Service) -> BacktestOu
         metrics=convert.metrics_out(result),
         warmup=convert.warmup_out(result.warmup),
         insufficient_cash_count=result.insufficient_cash_count,
-        notes=convert.notes_out(result, sid.market, data.info),
-        daily=convert.daily_out(result),
+        notes=convert.notes_out(result, sid.market, data.info, benchmark),
+        daily=convert.daily_out(result, benchmark),
         signals=convert.signals_out(result),
         fills=convert.fills_out(result),
         skipped_orders=convert.skipped_out(result),
         events=convert.events_out(result),
         trades=convert.trades_out(result),
+        benchmark=convert.benchmark_out(benchmark),
         corporate_actions=convert.corporate_actions_out(
             [bar for bar in data.bars if first_day <= bar.date <= last_day]
         ),
@@ -294,6 +299,11 @@ def start_sweep(body: SweepRequest, service: Service, sweeps: Sweeps) -> SweepSt
         field = "holdout_start_date" if holdout is not None else "grid"
         raise InputValidationError([ErrorItem(field=field, message=str(error))]) from error
 
+    # 期間ごとの買い持ち(docs/benchmark.md)。日数は使わないので、どの組み合わせのパラメータでも同じ
+    benchmarks = [
+        run_buy_and_hold(bars, segment.start, segment.end, costs.params_for(*pairs[0]))
+        for segment in segments
+    ]
     context = sweep_convert.SweepContext(
         symbol=convert.symbol_out(
             service.find_symbol(sid), source.source_id, service.describe(sid)
@@ -306,7 +316,7 @@ def start_sweep(body: SweepRequest, service: Service, sweeps: Sweeps) -> SweepSt
         costs=costs,
         fee_rate_pct=body.params.fee_rate_pct,
         slippage_rate_pct=body.params.slippage_rate_pct,
-        segments=sweep_convert.segments_out(segments, data.bars, period.start),
+        segments=sweep_convert.segments_out(segments, data.bars, period.start, benchmarks),
         longest_window=max(long for _, long in pairs),
     )
     spec = SweepSpec(tuple(bars), segments, costs, tuple(pairs), context)

@@ -6,7 +6,8 @@
 
 import { memo, useCallback, useId, useMemo, useState } from "react";
 
-import type { Objective, SegmentName, SweepCombo, SweepMetrics, SweepResult, SweepSegment } from "@/lib/api.ts";
+import type { BenchmarkMetrics, Objective, SegmentName, SweepCombo, SweepMetrics, SweepResult, SweepSegment } from "@/lib/api.ts";
+import { beatsText, benchmarkValue, segmentBenchmarkUnavailable, versusText } from "@/lib/benchmark.ts";
 import type { SweepRecord, SweepViewState } from "@/lib/flow.ts";
 import { direction, formatDate, formatDateTimeJst, formatNumber, formatPercent, formatRatePct, formatYen } from "@/lib/format.ts";
 import {
@@ -21,7 +22,7 @@ import {
   uniqueBest,
 } from "@/lib/sweep.ts";
 
-import { SecondaryButton } from "../ui.tsx";
+import { ScrollRegion, SecondaryButton } from "../ui.tsx";
 import { formatObjective, Heatmap, SEGMENT_LABELS } from "./Heatmap.tsx";
 
 const TONE = { up: "text-shu", down: "text-ai", flat: "text-ink" } as const;
@@ -50,6 +51,7 @@ export function SweepView({
   const ranking = rankingFor(result.rankings, objective);
   const best = uniqueBest(ranking);
   const hasHoldout = result.segments.some((s) => s.name === "out_of_sample");
+  const shownSegment = result.segments.find((s) => s.name === segment) ?? result.segments[0];
   // ヒートマップのマスを描き直さないように、描き直しで変わらない関数にする
   const select = useCallback((index: number) => onViewChange({ selected: index }), [onViewChange]);
 
@@ -102,6 +104,7 @@ export function SweepView({
           bestIndex={best}
           selected={selected}
           onSelect={select}
+          benchmark={benchmarkValue(shownSegment.benchmark, objective)}
         />
         <p className="mt-3 text-[13px] leading-6 text-ink-3">
           1位のまわりも良い(なだらかな山)なら、日数を少し変えても成績が崩れにくいことは分かります。ただし、となりの組み合わせはほとんど同じ売買をするので、
@@ -197,6 +200,7 @@ function Summary({
   const value = (m: SweepMetrics | null) => formatObjective(m ? (m[objective] as number | null) : null, objective);
   const outOfSample = result.segments.find((s) => s.name === "out_of_sample");
   const error = outOfSample ? sharpeStandardError(outOfSample.business_days, result.params.trading_days_per_year) : null;
+  const segments = result.segments;
   return (
     <section aria-labelledby={headingId}>
       <div className="flex flex-wrap items-baseline justify-between gap-3">
@@ -261,6 +265,13 @@ function Summary({
                       検証期間では {count.format(ranking.out_of_sample_ranked)}通り中 {ranking.best_out_of_sample_rank}位
                     </span>
                   )}
+                  {outOfSample && (
+                    <BenchmarkVersus
+                      value={best.out_of_sample ? (best.out_of_sample[objective] as number | null) : null}
+                      benchmark={benchmarkValue(outOfSample.benchmark, objective)}
+                      objective={objective}
+                    />
+                  )}
                   {objective === "sharpe_ratio" && error !== null && (
                     <span className="block text-[12px] font-normal text-ink-3">偶然だけでも ±{error.toFixed(1)} 程度ぶれます(目安)</span>
                   )}
@@ -286,6 +297,38 @@ function Summary({
             <span className="text-[18px]">なし</span>
           </Row>
         )}
+        <Row label="買い持ち(比較)" help="同じ期間・同じ費用で、期間の最初に買って最後まで持った場合">
+          {segments.map((s) => (
+            <span key={s.name} className="block text-[15px] font-normal text-ink-2">
+              {hasHoldout ? `${s.name === "in_sample" ? "選ぶ期間" : "検証期間"} ` : ""}
+              <b className="text-[18px] text-ink">
+                {segmentBenchmarkUnavailable(s.benchmark.status) ?? formatObjective(benchmarkValue(s.benchmark, objective), objective)}
+              </b>
+            </span>
+          ))}
+        </Row>
+        <Row
+          label="買い持ちより良かった組み合わせ"
+          help={
+            hasHoldout
+              ? "選ぶ期間で買い持ちを上回っても、検証期間でも上回るとは限りません"
+              : "同じ期間で比べた数です(選ぶのに使った期間なので、良く見えやすくなっています)"
+          }
+        >
+          {(["in_sample", "out_of_sample"] as const)
+            .filter((name) => name === "in_sample" || hasHoldout)
+            .map((name) => {
+              const text = beatsText(ranking[`${name}_beats_benchmark`], name === "in_sample" ? ranking.in_sample_ranked : ranking.out_of_sample_ranked);
+              const status = segments.find((s) => s.name === name)?.benchmark.status ?? "bought";
+              const missing = status === "bought" ? "−(買い持ちの値が算出不可)" : "−(買い持ちを買えなかったので比べない)";
+              return (
+                <span key={name} className="block text-[15px] font-normal text-ink-2">
+                  {hasHoldout ? `${name === "in_sample" ? "選ぶ期間" : "検証期間"} ` : ""}
+                  <b className="text-[18px] text-ink">{text ?? missing}</b>
+                </span>
+              );
+            })}
+        </Row>
         <Row
           label="1位のとなりの平均"
           help={`格子で1位のとなり(短期・長期それぞれ1刻み前後)の、選ぶ期間の${OBJECTIVE_LABELS[objective]}の平均`}
@@ -304,6 +347,13 @@ function Summary({
   );
 }
 
+/** 「同じ期間の買い持ち(1.25)より悪い」。比べられないときは何も出さない(文は lib/benchmark.ts の versusText)。 */
+function BenchmarkVersus({ value, benchmark, objective }: { value: number | null; benchmark: number | null; objective: Objective }) {
+  const text = versusText(value, benchmark, objective, formatObjective(benchmark, objective));
+  if (text === null) return null;
+  return <span className="block text-[13px] font-normal text-ink-2">{text}</span>;
+}
+
 function Row({ label, help, children }: { label: string; help: string; children: React.ReactNode }) {
   return (
     <div className="grid grid-cols-[1fr_auto] items-baseline gap-x-4 border-b border-rule py-3 sm:pr-6 sm:odd:border-r sm:even:pl-6">
@@ -318,25 +368,27 @@ function Row({ label, help, children }: { label: string; help: string; children:
 
 // --- 選んだ組み合わせ ------------------------------------------------------------------
 
+type Returns = Pick<SweepMetrics, "total_return" | "annualized_return" | "return_count">;
+
 const DETAIL_ROWS: {
   label: string;
   render: (m: SweepMetrics, tradingDays: number, segment: SweepSegment) => React.ReactNode;
+  /** 買い持ちの値(買い持ちにない項目は「−」) */
+  benchmark?: (b: BenchmarkMetrics, tradingDays: number) => React.ReactNode;
 }[] = [
   {
     label: "総リターン",
     render: (m) => <span className={TONE[direction(m.total_return)]}>{formatPercent(m.total_return, { signed: true })}</span>,
+    benchmark: (b) => formatPercent(b.total_return, { signed: true }),
   },
   {
     label: "年率リターン",
-    render: (m, days) => (
-      <>
-        <span className={TONE[direction(m.annualized_return)]}>{formatPercent(m.annualized_return, { signed: true })}</span>
-        {m.annualized_return !== null && m.return_count < days && <span className="ml-1 text-[12px] font-normal text-ink-3">参考値</span>}
-      </>
-    ),
+    render: (m, days) => annualized(m, days, true),
+    // 買い持ちの列は、ほかの行と同じく色を付けない(売買ルールの値と見分けやすくするため)
+    benchmark: (b, days) => annualized(b, days, false),
   },
-  { label: "最大ドローダウン", render: (m) => formatPercent(m.max_drawdown) },
-  { label: "シャープレシオ", render: (m) => formatNumber(m.sharpe_ratio) },
+  { label: "最大ドローダウン", render: (m) => formatPercent(m.max_drawdown), benchmark: (b) => formatPercent(b.max_drawdown) },
+  { label: "シャープレシオ", render: (m) => formatNumber(m.sharpe_ratio), benchmark: (b) => formatNumber(b.sharpe_ratio) },
   {
     label: "勝率",
     render: (m) =>
@@ -348,8 +400,17 @@ const DETAIL_ROWS: {
     render: (m, _days, segment) => `${count.format(m.holding_days)} / ${count.format(segment.business_days)}営業日`,
   },
   { label: "資金不足で見送り", render: (m) => `${m.insufficient_cash_count}回` },
-  { label: "最終資産", render: (m) => formatYen(m.final_equity) },
+  { label: "最終資産", render: (m) => formatYen(m.final_equity), benchmark: (b) => formatYen(b.final_equity) },
 ];
+
+function annualized(m: Returns, days: number, toned: boolean): React.ReactNode {
+  return (
+    <>
+      <span className={toned ? TONE[direction(m.annualized_return)] : undefined}>{formatPercent(m.annualized_return, { signed: true })}</span>
+      {m.annualized_return !== null && m.return_count < days && <span className="ml-1 text-[12px] font-normal text-ink-3">参考値</span>}
+    </>
+  );
+}
 
 function ComboDetail({
   result,
@@ -389,9 +450,9 @@ function ComboDetail({
         {isRank === null ? "選ぶ期間 −(算出不可)" : `選ぶ期間 ${count.format(ranking.in_sample_ranked)}通り中 ${isRank}位`}
         {oosRank !== null && ` ・ 検証期間 ${count.format(ranking.out_of_sample_ranked)}通り中 ${oosRank}位`}
       </p>
-      <div className="mt-3 overflow-x-auto">
-        <table className="w-full min-w-[20rem] text-[14px] tabular">
-          <caption className="sr-only">選んだ組み合わせの、期間ごとの成績</caption>
+      <ScrollRegion label="選んだ組み合わせの成績の表" className="mt-3 overflow-x-auto">
+        <table className="w-full min-w-[30rem] text-[14px] tabular">
+          <caption className="sr-only">選んだ組み合わせの、期間ごとの成績(買い持ちと並べて)</caption>
           <thead className="border-y border-rule-strong text-ink-2">
             <tr>
               <th scope="col" className="py-2 pr-3 text-left font-normal">
@@ -400,10 +461,20 @@ function ComboDetail({
               <th scope="col" className="px-3 py-2 text-right font-normal">
                 選ぶ期間
               </th>
+              <th scope="col" className="px-3 py-2 text-right font-normal text-ink-3">
+                買い持ち<span className="sr-only">(選ぶ期間)</span>
+                {inSample.benchmark.status !== "bought" && <span className="block text-[11px]">買えず</span>}
+              </th>
               {combo.out_of_sample && (
-                <th scope="col" className="py-2 pl-3 text-right font-normal">
-                  検証期間
-                </th>
+                <>
+                  <th scope="col" className="px-3 py-2 text-right font-normal">
+                    検証期間
+                  </th>
+                  <th scope="col" className="py-2 pl-3 text-right font-normal text-ink-3">
+                    買い持ち<span className="sr-only">(検証期間)</span>
+                    {outOfSample?.benchmark.status !== "bought" && <span className="block text-[11px]">買えず</span>}
+                  </th>
+                </>
               )}
             </tr>
           </thead>
@@ -414,14 +485,20 @@ function ComboDetail({
                   {row.label}
                 </th>
                 <td className="px-3 py-2 text-right text-ink">{row.render(combo.in_sample, days, inSample)}</td>
+                <td className="px-3 py-2 text-right text-ink-3">{row.benchmark && inSample.benchmark.status === "bought" ? row.benchmark(inSample.benchmark, days) : "−"}</td>
                 {combo.out_of_sample && outOfSample && (
-                  <td className="py-2 pl-3 text-right text-ink">{row.render(combo.out_of_sample, days, outOfSample)}</td>
+                  <>
+                    <td className="px-3 py-2 text-right text-ink">{row.render(combo.out_of_sample, days, outOfSample)}</td>
+                    <td className="py-2 pl-3 text-right text-ink-3">
+                      {row.benchmark && outOfSample.benchmark.status === "bought" ? row.benchmark(outOfSample.benchmark, days) : "−"}
+                    </td>
+                  </>
                 )}
               </tr>
             ))}
           </tbody>
         </table>
-      </div>
+      </ScrollRegion>
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <SecondaryButton onClick={() => onInspect(combo.short_window, combo.long_window, "in_sample")}>
           {outOfSample ? "選ぶ期間で詳しく見る(売買の記録まで)" : "この組み合わせで詳しく見る(売買の記録まで)"}
@@ -462,7 +539,7 @@ function TopTable({
         選ぶ期間の上位{Math.min(TOP, result.count)}通り({OBJECTIVE_LABELS[objective]})
       </h3>
       <p className="mt-1 text-[13px] text-ink-3">順位は、同じ値なら同じ順位です。算出不可の組み合わせには順位を付けません。</p>
-      <div className="mt-3 overflow-x-auto">
+      <ScrollRegion label="上位の組み合わせの表" className="mt-3 overflow-x-auto">
         <table className="w-full min-w-[36rem] whitespace-nowrap text-[14px] tabular">
           <caption className="sr-only">選ぶ期間の成績のよい順</caption>
           <thead className="border-y border-rule-strong text-ink-2">
@@ -511,7 +588,7 @@ function TopTable({
             })}
           </tbody>
         </table>
-      </div>
+      </ScrollRegion>
     </section>
   );
 }
@@ -544,7 +621,7 @@ const AllCombosTable = memo(function AllCombosTable({ result, objective }: { res
         {open ? "すべての組み合わせの表を閉じる" : `すべての組み合わせを表で見る(${count.format(result.count)}通り)`}
       </button>
       {open && (
-        <div className="mt-3 max-h-[28rem] overflow-auto rounded-md border border-rule">
+        <ScrollRegion label="すべての組み合わせの表" className="mt-3 max-h-[28rem] overflow-auto rounded-md border border-rule">
           <table className="w-full min-w-[48rem] text-[13px] tabular">
             <caption className="sr-only">すべての組み合わせの成績(選ぶ期間の{OBJECTIVE_LABELS[objective]}のよい順)</caption>
             <thead className="sticky top-0 bg-surface-2 text-ink-2">
@@ -591,7 +668,7 @@ const AllCombosTable = memo(function AllCombosTable({ result, objective }: { res
               })}
             </tbody>
           </table>
-        </div>
+        </ScrollRegion>
       )}
     </div>
   );

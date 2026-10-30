@@ -244,6 +244,7 @@ class NoteOut(_Model):
         "no_holdout",
         "aligned_start",
         "sampling_error",
+        "benchmark",
     ]
     message: str
 
@@ -258,6 +259,7 @@ class DailyOut(_Model):
     valuation_price: float | None
     equity: float
     drawdown: float = Field(description="その日までの最高値からの下落率(表示用)")
+    benchmark_equity: float = Field(description="同じ日の、買い持ち(docs/benchmark.md)の資産額")
 
 
 class SignalOut(_Model):
@@ -314,6 +316,43 @@ class TradeOut(_Model):
     closed_by: Literal["sell", "merger"] | None
 
 
+class BenchmarkMetricsOut(_Model):
+    """買い持ちの成績(docs/mvp.md 5章と同じ定義)。勝率・取引回数は出さない(売らないため)。"""
+
+    total_return: float
+    annualized_return: float | None = Field(description="null は算出不可")
+    max_drawdown: float
+    sharpe_ratio: float | None = Field(description="null は算出不可")
+    return_count: int
+    final_equity: float
+
+
+BenchmarkStatus = Literal["bought", "insufficient_cash", "not_bought"]
+BENCHMARK_STATUS_HELP = (
+    "bought:買った / insufficient_cash:資金不足で買えなかった / not_bought:買う日がなかった。"
+    "買えなかったときは、比べない(値は初期資金のまま)"
+)
+
+
+class SegmentBenchmarkOut(BenchmarkMetricsOut):
+    """総当たりの期間ごとの買い持ち(docs/benchmark.md)。"""
+
+    status: BenchmarkStatus = Field(description=BENCHMARK_STATUS_HELP)
+
+
+class BenchmarkOut(_Model):
+    """比較の基準:買い持ち(docs/benchmark.md)。同じ期間・同じ費用で、最初に買って最後まで持った場合。"""
+
+    label: str
+    status: BenchmarkStatus = Field(description=BENCHMARK_STATUS_HELP)
+    signal_date: dt.date | None = Field(description="買うと決めた日(期間内の最初の有効日)")
+    fill: FillOut | None
+    skipped: SkippedOrderOut | None
+    events: list[EventOut]
+    metrics: BenchmarkMetricsOut
+    open_position_at_end: bool
+
+
 class BacktestOut(_Model):
     symbol: SymbolOut
     strategy_id: str
@@ -330,6 +369,7 @@ class BacktestOut(_Model):
     skipped_orders: list[SkippedOrderOut]
     events: list[EventOut]
     trades: list[TradeOut]
+    benchmark: BenchmarkOut
     corporate_actions: list[CorporateActionOut] = Field(
         description="期間内の権利落ち(株を持っていない日も含む)。チャートの線を切る位置などに使う"
     )
@@ -404,6 +444,9 @@ class SegmentOut(_Model):
     first_business_day: dt.date
     last_business_day: dt.date
     business_days: int
+    benchmark: SegmentBenchmarkOut = Field(
+        description="この期間の買い持ち(docs/benchmark.md)の成績"
+    )
 
 
 class SweepGridOut(_Model):
@@ -464,6 +507,12 @@ class RankingOut(_Model):
     )
     in_sample_ranked: int = Field(description="選ぶ期間の値がある組み合わせの数")
     out_of_sample_ranked: int = Field(description="検証期間の値がある組み合わせの数")
+    in_sample_beats_benchmark: int | None = Field(
+        description="選ぶ期間で、買い持ちより良かった組み合わせの数(買い持ちの値が算出不可なら null)"
+    )
+    out_of_sample_beats_benchmark: int | None = Field(
+        description="検証期間で、買い持ちより良かった組み合わせの数(検証期間がない・買い持ちの値が算出不可なら null)"
+    )
     rank_correlation: float | None = Field(description="選ぶ期間と検証期間の順位相関(スピアマン)")
     correlation_pairs: int
     neighbors_mean: float | None = Field(

@@ -200,6 +200,8 @@ test("シャープレシオの偶然の幅の目安(API の注記と同じ式)�
     correlation_pairs: 3,
     neighbors_mean: null,
     neighbors_count: 0,
+    in_sample_beats_benchmark: null,
+    out_of_sample_beats_benchmark: null,
   };
   assert.equal(uniqueBest(ranking), 2);
   assert.equal(uniqueBest({ ...ranking, best_tie_count: 2 }), null); // 同率1位は1つに決めない

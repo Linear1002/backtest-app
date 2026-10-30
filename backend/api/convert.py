@@ -5,6 +5,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from backend.api.schemas import (
+    BenchmarkMetricsOut,
+    BenchmarkOut,
+    BenchmarkStatus,
     CorporateActionOut,
     DailyOut,
     DataInfoOut,
@@ -20,7 +23,8 @@ from backend.api.schemas import (
 )
 from backend.marketdata.models import DailyBar, DataInfo, SymbolInfo
 from engine.reference import BacktestResult, Bar
-from engine.reference.types import WarmupInfo
+from engine.reference.benchmark import BuyAndHoldResult
+from engine.reference.types import CorporateActionEvent, Fill, SkippedOrder, WarmupInfo
 
 EX_RT_LABELS = {1: "株式分割", 2: "株式併合", 3: "株主割当増資"}
 
@@ -30,7 +34,15 @@ NOTE_MESSAGES = {
     "survivorship": "選べる銘柄は現在も上場している銘柄だけのため、結果は実際より良く見えやすくなります",
     "demo_data": "架空データです。実在の銘柄・株価ではありません",
     "execution_assumption": "寄付きの成行注文で、始値で約定できたと仮定しています(ストップ高・ストップ安、配当、税金は考慮していません)",
+    "benchmark": (
+        "買い持ちは、期間の最初に売買が成立した日の終値で買うと決め、次に売買が成立した日の始値で買えるだけ買って、"
+        "最後まで持った場合です(手数料・スリッページ・分割の扱いは同じ)。配当を含めないので、ずっと株を持つ買い持ちのほうが、"
+        "実際より不利に出ます。一方、買い持ちの最後の日は売らずに評価する(清算コスト控除前)ので、売った場合の手数料・"
+        "スリッページ(およそ 最後の評価額 ×(手数料率 + スリッページ率))の分だけ、買い持ちは有利に出ます"
+    ),
 }
+
+BENCHMARK_LABEL = "買い持ち"
 
 
 def to_engine_bars(bars: Sequence[DailyBar]) -> list[Bar]:
@@ -113,7 +125,12 @@ def warmup_out(w: WarmupInfo) -> WarmupOut:
     )
 
 
-def notes_out(result: BacktestResult, market: str, data_info: DataInfo) -> list[NoteOut]:
+def notes_out(
+    result: BacktestResult,
+    market: str,
+    data_info: DataInfo,
+    benchmark: BuyAndHoldResult | None = None,
+) -> list[NoteOut]:
     notes: list[NoteOut] = []
     if data_info.warning:
         notes.append(NoteOut(kind="stale_data", message=data_info.warning))
@@ -149,6 +166,8 @@ def notes_out(result: BacktestResult, market: str, data_info: DataInfo) -> list[
     notes.append(
         NoteOut(kind="execution_assumption", message=NOTE_MESSAGES["execution_assumption"])
     )
+    if benchmark is not None:
+        notes.append(NoteOut(kind="benchmark", message=NOTE_MESSAGES["benchmark"]))
     return notes
 
 
@@ -167,10 +186,12 @@ def metrics_out(result: BacktestResult) -> MetricsOut:
     )
 
 
-def daily_out(result: BacktestResult) -> list[DailyOut]:
+def daily_out(result: BacktestResult, benchmark: BuyAndHoldResult) -> list[DailyOut]:
+    """日々の数値。買い持ちの資産額も同じ日に並べる(同じ期間の営業日なので、日付は1対1で対応する)。"""
+    assert [d.date for d in benchmark.daily] == [d.date for d in result.daily]
     rows = []
     peak = result.daily[0].equity
-    for r in result.daily:
+    for r, b in zip(result.daily, benchmark.daily, strict=True):
         peak = max(peak, r.equity)
         rows.append(
             DailyOut(
@@ -183,6 +204,7 @@ def daily_out(result: BacktestResult) -> list[DailyOut]:
                 valuation_price=r.valuation_price,
                 equity=r.equity,
                 drawdown=1 - r.equity / peak,
+                benchmark_equity=b.equity,
             )
         )
     return rows
@@ -192,37 +214,43 @@ def signals_out(result: BacktestResult) -> list[SignalOut]:
     return [SignalOut(date=s.date, side=s.side, action=s.action) for s in result.signals]
 
 
+def fill_out(f: Fill) -> FillOut:
+    return FillOut(
+        date=f.date,
+        signal_date=f.signal_date,
+        side=f.side,
+        open_price=f.open_price,
+        fill_price=f.fill_price,
+        shares=f.shares,
+        notional=f.notional,
+        fee=f.fee,
+        cash_after=f.cash_after,
+    )
+
+
 def fills_out(result: BacktestResult) -> list[FillOut]:
-    return [
-        FillOut(
-            date=f.date,
-            signal_date=f.signal_date,
-            side=f.side,
-            open_price=f.open_price,
-            fill_price=f.fill_price,
-            shares=f.shares,
-            notional=f.notional,
-            fee=f.fee,
-            cash_after=f.cash_after,
-        )
-        for f in result.fills
-    ]
+    return [fill_out(f) for f in result.fills]
+
+
+def skipped_order_out(s: SkippedOrder) -> SkippedOrderOut:
+    return SkippedOrderOut(
+        date=s.date,
+        signal_date=s.signal_date,
+        open_price=s.open_price,
+        fill_price=s.fill_price,
+        cash=s.cash,
+    )
 
 
 def skipped_out(result: BacktestResult) -> list[SkippedOrderOut]:
-    return [
-        SkippedOrderOut(
-            date=s.date,
-            signal_date=s.signal_date,
-            open_price=s.open_price,
-            fill_price=s.fill_price,
-            cash=s.cash,
-        )
-        for s in result.skipped_orders
-    ]
+    return [skipped_order_out(s) for s in result.skipped_orders]
 
 
 def events_out(result: BacktestResult) -> list[EventOut]:
+    return event_rows_out(result.events)
+
+
+def event_rows_out(events: Sequence[CorporateActionEvent]) -> list[EventOut]:
     return [
         EventOut(
             date=e.date,
@@ -236,8 +264,43 @@ def events_out(result: BacktestResult) -> list[EventOut]:
             fraction_cash=e.fraction_cash,
             closed_position=e.closed_position,
         )
-        for e in result.events
+        for e in events
     ]
+
+
+def benchmark_metrics_out(b: BuyAndHoldResult) -> BenchmarkMetricsOut:
+    m = b.metrics
+    return BenchmarkMetricsOut(
+        total_return=m.total_return,
+        annualized_return=m.annualized_return,
+        max_drawdown=m.max_drawdown,
+        sharpe_ratio=m.sharpe_ratio,
+        return_count=m.return_count,
+        final_equity=b.final_equity,
+    )
+
+
+def benchmark_status(b: BuyAndHoldResult) -> BenchmarkStatus:
+    """買えたか(bought)、資金不足で買えなかったか(insufficient_cash)、買う日がなかったか(not_bought)。"""
+    if b.fill is not None:
+        return "bought"
+    if b.skipped is not None:
+        return "insufficient_cash"
+    return "not_bought"
+
+
+def benchmark_out(b: BuyAndHoldResult) -> BenchmarkOut:
+    """買い持ち(docs/benchmark.md)の結果。"""
+    return BenchmarkOut(
+        label=BENCHMARK_LABEL,
+        status=benchmark_status(b),
+        signal_date=b.signal_date,
+        fill=fill_out(b.fill) if b.fill is not None else None,
+        skipped=skipped_order_out(b.skipped) if b.skipped is not None else None,
+        events=event_rows_out(b.events),
+        metrics=benchmark_metrics_out(b),
+        open_position_at_end=b.open_position_at_end,
+    )
 
 
 def trades_out(result: BacktestResult) -> list[TradeOut]:

@@ -8,6 +8,7 @@ import pytest
 
 from backend.sweep_summary import (
     average_ranks,
+    beats,
     competition_rank,
     neighbors,
     order_best_first,
@@ -158,3 +159,21 @@ def test_tied_best_is_not_called_the_first() -> None:
     values[2] = metrics(None, total=0.4)
     r3 = rank(pairs, grid.short_values(), grid.long_values(), values, oos, "total_return")
     assert r3.best_tie_count == 1 and r3.best_out_of_sample_rank == 3  # 0.1 より良いのは 0.3・0.2
+
+
+def test_beats_counts_combos_better_than_buy_and_hold() -> None:
+    values = [0.5, None, 1.2, 0.8, 0.8]
+    assert beats(values, 0.8, "sharpe_ratio") == 1  # 同じ値(0.8)は「良い」に数えない
+    assert beats(values, None, "sharpe_ratio") is None  # 買い持ちの値が算出不可
+    assert beats([0.1, 0.3, 0.2], 0.2, "max_drawdown") == 1  # 最大ドローダウンは小さいほど良い
+    grid = SweepGrid(1, 1, 1, 2, 3, 1)
+    r = rank(
+        grid.pairs(),
+        grid.short_values(),
+        grid.long_values(),
+        [metrics(0.5), metrics(1.5)],
+        None,
+        "sharpe_ratio",
+        (1.0, None),
+    )
+    assert r.in_sample_beats_benchmark == 1 and r.out_of_sample_beats_benchmark is None

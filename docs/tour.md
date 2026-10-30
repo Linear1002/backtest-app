@@ -6,6 +6,7 @@
 
 - 計算の決まりごとの正:`docs/mvp.md`(このガイドでは「仕様 2.6」のように節番号で書く)
 - C++ 版を自分で書く道のり:`docs/cpp/README.md`
+- どの順に読んで、何を確かめるか(問いと答えつき):`docs/study.md`
 
 ## 0. 全体の地図
 
@@ -74,7 +75,8 @@ flowchart LR
 2. 銘柄が対象か(`require_listed`。現在上場の銘柄だけ:仕様 3.6)→ 日足を読む(`service.load`)
 3. 期間のチェック(`validate_period`。データの範囲のチェックはここだけで行う)
 4. **銘柄の全期間の日足**をエンジンに渡す(`convert.to_engine_bars` → `run(...)`)。読み込む範囲の切り出しはエンジンの仕事
-5. 結果を `convert.*_out` で JSON の形にして返す(計算にかかった時間も測る)
+5. 比較の基準として、同じ期間・同じ費用の**買い持ち**を計算する(`engine/reference/benchmark.py` の `run_buy_and_hold`。エンジンにかかわらず Python で。`docs/benchmark.md`)
+6. 結果を `convert.*_out` で JSON の形にして返す(計算にかかった時間も測る)
 
 ## 4. 株価データ(`backend/marketdata/`)
 
@@ -101,6 +103,8 @@ Python で書いた「正解」。遅くてよいので、仕様の文と1対1�
 | `metrics.py` | 総リターン・年率・最大ドローダウン・シャープレシオ・勝率 | 5章 |
 | `types.py` | 日足・パラメータ・結果の型 | − |
 | `contract.py`・`csvio.py`・`compare.py`・`cli.py` | C++ 版との答え合わせ(ファイルの形・比べ方・コマンド) | 6章・`docs/cpp/contract.md` |
+| `benchmark.py` の `run_buy_and_hold` | 比較の基準:買い持ち。約定・株数・分割・評価・指標は `run_backtest` と同じ関数を呼ぶ(シグナルの判定だけがない) | `docs/benchmark.md` |
+| `sweep.py`・`sweep_files.py`・`sweep_cli.py` | 総当たり(9章) | `docs/sweep.md` |
 
 **`run_backtest` の流れ**
 
@@ -110,14 +114,14 @@ Python で書いた「正解」。遅くてよいので、仕様の文と1対1�
 | 2 | `select_load_range`:開始日より前の有効日を `long_window` 個まで + 期間。期間の営業日が3日未満ならエラー | 2.2・4.3 |
 | 3 | `validate_records`:読み込む範囲のレコードだけをチェック | 3.7 |
 | 4 | `compute_cross_states`:有効日ごとに D(t) を計算 | 2.2・2.3 |
-| 5 | 期間の営業日ごとに:**分割・併合 → 約定 → 評価 → シグナル**の順 | 2.5 |
+| 5 | 期間の営業日ごとに:**分割・併合(`apply_split_or_merger`)→ 約定(`fill_buy`・売り)→ 評価 → シグナル**の順。前の2つの関数は買い持ちも使う | 2.5 |
 | 6 | `compute_metrics`、ウォームアップの情報 | 5章・4.1 |
 
 ## 6. テスト
 
 | 場所 | 何を確かめるか | 動かし方 |
 |---|---|---|
-| `tests/python/test_reference_*.py` | エンジンの手計算のケース、性質のテスト(未来のデータを書き換えても過去のシグナルが変わらない、など) | `uv run pytest` |
+| `tests/python/test_reference_*.py` | エンジンの手計算のケース、性質のテスト(未来のデータを書き換えても過去のシグナルが変わらない、買い持ちは「1回だけ買って持ち続けた移動平均クロス」と資産額が完全に一致する、など) | `uv run pytest` |
 | `tests/python/test_api.py` ほか | API・入力チェック・データ層・設定 | 同上 |
 | `tests/fixtures/` + `test_param_contract.py` | 画面と API で共有する表:パラメータの定義(`ma_cross_params.json`)と、入力 → メッセージ(`param_messages.json`・`period_messages.json`・`sweep_messages.json`)。画面のテスト(`lib/form.test.ts`・`lib/sweep.test.ts`)も同じ表を読むので、片方だけ変えるとどちらかが落ちる | 同上 |
 | `tests/golden/` + `test_golden.py` | 正解データ(60ケース)。リファレンスがビット単位で再現すること(`make test` の pytest で動く)、C++ 版があれば一致すること(`make test-cpp`) | `make test`・`make test-cpp` |

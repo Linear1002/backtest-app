@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Playwright が書き出すレポート(make e2e で失敗したときにできる。Git にも入れない)
+    "playwright-report/**",
+    "test-results/**",
   ]),
 ]);
 
