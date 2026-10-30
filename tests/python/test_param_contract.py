@@ -1,0 +1,100 @@
+"""パラメータの定義と入力チェックを、画面(frontend)と API でそろえるためのテスト。
+
+- tests/fixtures/ma_cross_params.json:API が返す移動平均クロスのパラメータの定義(GET /api/strategies)。
+  画面のテスト(frontend/lib/testing.ts)はこのファイルを読むので、定義を変えたら作り直す:
+      uv run python -m tests.python.test_param_contract
+- tests/fixtures/param_messages.json:入力 → 誤りのメッセージ の表。画面のテストも同じ表を読む
+- tests/fixtures/period_messages.json:期間の入力 → 誤りのメッセージ の表。画面のテストも同じ表を読む
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+from pathlib import Path
+
+import pytest
+
+from backend.api.schemas import MaCrossParamsIn, ParamOut
+from backend.api.validation import InputValidationError, validate_params, validate_period
+from backend.marketdata.models import DateRange, SymbolId
+from backend.marketdata.synthetic import generate_bars
+from backend.strategies import STRATEGIES_BY_ID
+
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
+PARAMS_FILE = FIXTURES / "ma_cross_params.json"
+MESSAGES = json.loads((FIXTURES / "param_messages.json").read_text(encoding="utf-8"))["cases"]
+DEFAULTS = {
+    "short_window": 5,
+    "long_window": 25,
+    "fee_rate_pct": 0.1,
+    "slippage_rate_pct": 0.05,
+    "initial_cash": 1_000_000,
+}
+
+
+def served_params() -> list[dict]:
+    """GET /api/strategies が返す ma_cross のパラメータ(routes.strategies と同じ作り方)。"""
+    spec = STRATEGIES_BY_ID["ma_cross"]
+    return [ParamOut(**vars(p)).model_dump(mode="json") for p in spec.params]
+
+
+def test_params_fixture_matches_api() -> None:
+    saved = json.loads(PARAMS_FILE.read_text(encoding="utf-8"))
+    assert saved == served_params(), (
+        "パラメータの定義が変わりました。"
+        "uv run python -m tests.python.test_param_contract で tests/fixtures/ma_cross_params.json を作り直してください"
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [c for c in MESSAGES if not c["frontend_only"]],
+    ids=lambda c: json.dumps(c["params"], ensure_ascii=False),
+)
+def test_api_gives_the_same_message_as_the_screen(case: dict) -> None:
+    raw = MaCrossParamsIn(**{**DEFAULTS, **{k: float(v) for k, v in case["params"].items()}})
+    market = SymbolId.parse("DEMO:1001").market_config
+    if case["field"] is None:
+        validate_params(raw, market)
+        return
+    with pytest.raises(InputValidationError) as caught:
+        validate_params(raw, market)
+    # 表で指定した欄だけに、その文が出る(ほかの欄に余計な誤りが出ていないことも確かめる)
+    assert {e.field: e.message for e in caught.value.errors} == {case["field"]: case["message"]}
+
+
+PERIODS = json.loads((FIXTURES / "period_messages.json").read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def demo_bars() -> list:
+    return list(generate_bars("1001"))
+
+
+@pytest.mark.parametrize(
+    "case",
+    [c for c in PERIODS["cases"] if c["only"] != "frontend"],
+    ids=lambda c: f"{c['start_date']}..{c['end_date']}",
+)
+def test_api_gives_the_same_period_message_as_the_screen(case: dict, demo_bars: list) -> None:
+    available = DateRange(
+        dt.date.fromisoformat(PERIODS["range"]["first_date"]),
+        dt.date.fromisoformat(PERIODS["range"]["last_date"]),
+    )
+    assert (demo_bars[0].date, demo_bars[-1].date) == (available.first, available.last)
+    start = dt.date.fromisoformat(case["start_date"])
+    end = dt.date.fromisoformat(case["end_date"])
+    if case["field"] is None:
+        validate_period(start, end, available, demo_bars)
+        return
+    with pytest.raises(InputValidationError) as caught:
+        validate_period(start, end, available, demo_bars)
+    assert {e.field: e.message for e in caught.value.errors} == {case["field"]: case["message"]}
+
+
+if __name__ == "__main__":
+    PARAMS_FILE.write_text(
+        json.dumps(served_params(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    print(f"{PARAMS_FILE} を書きました")

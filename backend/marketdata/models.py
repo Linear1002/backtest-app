@@ -23,6 +23,7 @@ class MarketConfig:
     lot_size: int  # 売買単位(株)
     code_pattern: str  # 銘柄コード部分の正規表現
     has_price_limits: bool  # 値幅制限がある市場か(MVPの計算では扱わない。7章)
+    trading_days_per_year: int  # 年率換算に使う年間の営業日数(docs/mvp.md 5章)
 
 
 MARKETS: dict[str, MarketConfig] = {
@@ -34,6 +35,7 @@ MARKETS: dict[str, MarketConfig] = {
         # 4文字。数字だけのコード(7203)と、英字を含むコード(186A)がある
         code_pattern=r"[0-9][0-9A-Z]{3}",
         has_price_limits=True,
+        trading_days_per_year=245,
     ),
     "DEMO": MarketConfig(
         code="DEMO",
@@ -42,6 +44,7 @@ MARKETS: dict[str, MarketConfig] = {
         lot_size=100,
         code_pattern=r"[0-9]{4}",
         has_price_limits=False,
+        trading_days_per_year=245,
     ),
 }
 
@@ -68,13 +71,18 @@ class SymbolId:
         normalized = text.strip().upper()
         match = _SYMBOL_ID_RE.match(normalized)
         if match is None:
-            raise InvalidSymbolIdError(f"銘柄IDの形式が正しくありません: {text!r}(例: TSE:7203)")
+            shown = (
+                text if len(text) <= 20 else text[:20] + "…"
+            )  # 長い入力をそのままメッセージに返さない
+            raise InvalidSymbolIdError(f"銘柄IDの形式が正しくありません: {shown!r}(例: TSE:7203)")
         market, code = match.group("market"), match.group("code")
         config = MARKETS.get(market)
         if config is None:
-            raise InvalidSymbolIdError(f"対応していない市場です: {market}")
+            raise InvalidSymbolIdError(f"対応していない市場です: {market[:10]}")
         if re.fullmatch(config.code_pattern, code) is None:
-            raise InvalidSymbolIdError(f"{config.name}の銘柄コードとして正しくありません: {code}")
+            raise InvalidSymbolIdError(
+                f"{config.name}の銘柄コードとして正しくありません: {code[:10]}"
+            )
         return cls(market=market, code=code)
 
     @property
