@@ -338,7 +338,6 @@ class SegmentBenchmarkOut(BenchmarkMetricsOut):
     """総当たりの期間ごとの買い持ち(docs/benchmark.md)。"""
 
     status: BenchmarkStatus = Field(description=BENCHMARK_STATUS_HELP)
-    open_position_at_end: bool = Field(description="期間の最後に株を持っていたか(清算コスト控除前)")
 
 
 class BenchmarkOut(_Model):

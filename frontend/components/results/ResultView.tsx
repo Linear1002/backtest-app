@@ -188,7 +188,7 @@ function BenchmarkLine({ result }: { result: BacktestResult }) {
           </div>
           <p className="mt-1 text-[13px] text-ink-2">
             この売買ルールの総リターンは、<b className="text-ink">{returnGap(result.metrics.total_return, b.metrics.total_return)}</b>
-            でした(同じ手数料・スリッページ。配当は含めないので、買い持ちは実際より少し不利です。
+            でした(同じ手数料・スリッページ。配当は含めないので、買い持ちは実際より不利に出ます。
             買い持ちの最後の日は売らずに評価しています)。
           </p>
         </>
@@ -227,7 +227,10 @@ function Metrics({ result }: { result: BacktestResult }) {
       help: `1年(${result.params.trading_days_per_year}営業日)あたりに直した値`,
       // 期間は売買ルールと同じなので、参考値かどうかも同じ
       benchmark:
-        bm && `${formatPercent(bm.annualized_return, { signed: true })}${reference && bm.annualized_return !== null ? "(参考値)" : ""}`,
+        bm &&
+        `${formatPercent(bm.annualized_return, { signed: true })}${
+          bm.annualized_return !== null && result.notes.some((n) => n.kind === "annualized_reference") ? "(参考値)" : ""
+        }`,
     },
     {
       label: "最大ドローダウン",

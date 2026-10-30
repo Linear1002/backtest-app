@@ -90,8 +90,7 @@ def segments_out(
                 business_days=len(days),
                 benchmark=SegmentBenchmarkOut(
                     **benchmark_metrics_out(benchmark).model_dump(),
-                    status=benchmark_status(benchmark),  # type: ignore[arg-type]
-                    open_position_at_end=benchmark.open_position_at_end,
+                    status=benchmark_status(benchmark),
                 ),
             )
         )

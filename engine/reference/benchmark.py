@@ -117,9 +117,8 @@ def run_buy_and_hold(
             assert signal_date is not None
             bought = fill_buy(bar, signal_date, cash, params)
             if bought.fill is None:
-                skipped = (
-                    bought.skipped
-                )  # 資金不足。買い持ちは買い直さない(docs/benchmark.md 2章の2)
+                # 資金不足。買い持ちは買い直さない(docs/benchmark.md 2章の2)
+                skipped = bought.skipped
             else:
                 fill = bought.fill
                 cash = bought.fill.cash_after

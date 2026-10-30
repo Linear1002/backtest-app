@@ -160,8 +160,8 @@ export function sweepResult(symbolId: string): SweepResult {
     engine: { id: "python", label: "Python", available: true, note: "", max_pairs: 2000 },
     segments: [
       // 選ぶ期間は、長期20日のウォームアップのために 2024-01-04 から 2024-02-01 に遅らせた(docs/sweep.md 3章)
-      { name: "in_sample", start_date: "2024-02-01", end_date: "2025-06-30", requested_start_date: "2024-01-04", skipped_trading_days: 20, first_business_day: "2024-02-01", last_business_day: "2025-06-30", business_days: 340, benchmark: { ...BENCHMARK_FLAT, total_return: 0.25, sharpe_ratio: 0.7, max_drawdown: 0.18, final_equity: 1_250_000, status: "bought", open_position_at_end: true } },
-      { name: "out_of_sample", start_date: "2025-07-01", end_date: "2025-12-30", requested_start_date: "2025-07-01", skipped_trading_days: 0, first_business_day: "2025-07-01", last_business_day: "2025-12-30", business_days: 130, benchmark: { ...BENCHMARK_FLAT, total_return: 0.02, sharpe_ratio: 0.15, max_drawdown: 0.09, final_equity: 1_020_000, status: "bought", open_position_at_end: true } },
+      { name: "in_sample", start_date: "2024-02-01", end_date: "2025-06-30", requested_start_date: "2024-01-04", skipped_trading_days: 20, first_business_day: "2024-02-01", last_business_day: "2025-06-30", business_days: 340, benchmark: { ...BENCHMARK_FLAT, total_return: 0.25, sharpe_ratio: 0.7, max_drawdown: 0.18, final_equity: 1_250_000, status: "bought" } },
+      { name: "out_of_sample", start_date: "2025-07-01", end_date: "2025-12-30", requested_start_date: "2025-07-01", skipped_trading_days: 0, first_business_day: "2025-07-01", last_business_day: "2025-12-30", business_days: 130, benchmark: { ...BENCHMARK_FLAT, total_return: 0.02, sharpe_ratio: 0.15, max_drawdown: 0.09, final_equity: 1_020_000, status: "bought" } },
     ],
     grid: { short_min: 3, short_max: 6, short_step: 3, long_min: 10, long_max: 20, long_step: 10, short_values: [3, 6], long_values: [10, 20] },
     params: { fee_rate_pct: 0.1, slippage_rate_pct: 0.05, fee_rate: 0.001, slippage_rate: 0.0005, initial_cash: 1_000_000, lot_size: 100, trading_days_per_year: 245 },

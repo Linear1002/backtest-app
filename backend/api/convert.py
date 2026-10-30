@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from backend.api.schemas import (
     BenchmarkMetricsOut,
     BenchmarkOut,
+    BenchmarkStatus,
     CorporateActionOut,
     DailyOut,
     DataInfoOut,
@@ -36,8 +37,8 @@ NOTE_MESSAGES = {
     "benchmark": (
         "買い持ちは、期間の最初に売買が成立した日の終値で買うと決め、次に売買が成立した日の始値で買えるだけ買って、"
         "最後まで持った場合です(手数料・スリッページ・分割の扱いは同じ)。配当を含めないので、ずっと株を持つ買い持ちのほうが、"
-        "実際より不利に出ます。一方、買い持ちの最後の日は売らずに評価する(清算コスト控除前)ので、売買ルールが最後に"
-        "売り切っているときは、その売りの費用の分だけ買い持ちが有利です"
+        "実際より不利に出ます。一方、買い持ちの最後の日は売らずに評価する(清算コスト控除前)ので、売った場合の手数料・"
+        "スリッページ(およそ 最後の評価額 ×(手数料率 + スリッページ率))の分だけ、買い持ちは有利に出ます"
     ),
 }
 
@@ -279,7 +280,7 @@ def benchmark_metrics_out(b: BuyAndHoldResult) -> BenchmarkMetricsOut:
     )
 
 
-def benchmark_status(b: BuyAndHoldResult) -> str:
+def benchmark_status(b: BuyAndHoldResult) -> BenchmarkStatus:
     """買えたか(bought)、資金不足で買えなかったか(insufficient_cash)、買う日がなかったか(not_bought)。"""
     if b.fill is not None:
         return "bought"
@@ -292,7 +293,7 @@ def benchmark_out(b: BuyAndHoldResult) -> BenchmarkOut:
     """買い持ち(docs/benchmark.md)の結果。"""
     return BenchmarkOut(
         label=BENCHMARK_LABEL,
-        status=benchmark_status(b),  # type: ignore[arg-type]
+        status=benchmark_status(b),
         signal_date=b.signal_date,
         fill=fill_out(b.fill) if b.fill is not None else None,
         skipped=skipped_order_out(b.skipped) if b.skipped is not None else None,

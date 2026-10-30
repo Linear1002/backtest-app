@@ -19,7 +19,7 @@ function benchmark(status: Benchmark["status"], skipped: Benchmark["skipped"] = 
 }
 
 function segment(status: SegmentBenchmark["status"] = "bought"): SegmentBenchmark {
-  return { ...METRICS, status, open_position_at_end: true };
+  return { ...METRICS, status };
 }
 
 test("買い持ちを買えなかったときの説明(必要額は手数料込み。エンジンの株数の決め方と同じ)", () => {
@@ -38,6 +38,7 @@ test("買い持ちを買えなかったときの説明(必要額は手数料込�
   );
   assert.equal(segmentBenchmarkUnavailable("bought"), null);
   assert.equal(segmentBenchmarkUnavailable("insufficient_cash"), "資金不足で買えず");
+  assert.equal(segmentBenchmarkUnavailable("not_bought"), "買う日がなく買えず");
 });
 
 test("総リターンの差は、ポイントで上・下を書く", () => {
@@ -60,6 +61,7 @@ test("買い持ちと比べた言い方(最大ドローダウンは小さいほ�
   assert.equal(versusBenchmark(0.1, 0.4, "max_drawdown"), "良い");
   assert.equal(versusBenchmark(0.5, 0.5, "sharpe_ratio"), "同じ");
   assert.equal(versusBenchmark(1.2501, 1.2499, "sharpe_ratio"), "同じ"); // どちらも「1.25」と出る
+  assert.equal(versusBenchmark(0.12344, 0.12341, "total_return"), "同じ"); // どちらも「12.34%」と出る
   assert.equal(versusBenchmark(null, 0.5, "sharpe_ratio"), null);
   assert.equal(versusText(0.83, 1.25, "sharpe_ratio", "1.25"), "同じ期間の買い持ち(1.25)より悪い");
   assert.equal(versusText(0, 0, "max_drawdown", "0.00%"), "同じ期間の買い持ち(0.00%)と同じ");

@@ -247,6 +247,15 @@ test("総当たり:列の多い格子でも、ページは横にはみ出さず�
   await expectNoA11yViolations(page, "列の多い総当たりの結果(スマートフォン)");
 });
 
+test("買い持ちを買えないときは比べない(docs/benchmark.md 3章)", async ({ page }) => {
+  // DEMO:1009 は株価が高く、100万円では100株を買えない
+  await chooseSymbol(page, "1009", "1009");
+  await runFromParams(page);
+  await expect(page.getByText(/比べると:買い持ちは、初期資金が100株分\(手数料込みで約/)).toBeVisible();
+  await expect(page.getByText("買い持ちの資産額(比較)")).toHaveCount(0); // チャートの凡例に出さない
+  await expect(page.getByRole("region", { name: "成績表" })).not.toContainText("買い持ち");
+});
+
 test("スマートフォンの幅でも、取引の記録が読める @mobile", async ({ page }) => {
   await chooseSymbol(page, "あさつゆ", "1004");
   await runFromParams(page);
