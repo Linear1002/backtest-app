@@ -76,7 +76,7 @@
 | コマンド | 内容 |
 |---|---|
 | `make setup` | 依存のインストール(uv sync / npm ci)と CMake の設定。最初と、依存が変わったときに実行 |
-| `make test` | pytest、C++ のビルド、ctest(GoogleTest)、画面の関数のテスト(`npm test`) |
+| `make test` | C++ のビルド → pytest → ctest(GoogleTest)→ 画面の関数のテスト(`npm test`) |
 | `make lint` | ruff check / ruff format --check / ESLint |
 | `make dev-api` | API サーバー起動 → http://localhost:8000/api/health 、API ドキュメント http://localhost:8000/docs |
 | `make dev-web` | 画面の開発サーバー起動 → http://localhost:3000 |
@@ -84,8 +84,13 @@
 | `make data-fetch SYMBOLS="TSE:7203"` | J-Quants の日足を取得して保存 |
 | `make data-info SYMBOL=DEMO:1003` | 保存済みデータの期間・権利落ちを表示 |
 | `make data-check` | docs/mvp.md 3.1 の「要確認」を実データで調べる(APIキーが必要。10分ほど) |
+| `make test-cpp` | C++ 版エンジンを正解データ(tests/golden)と答え合わせ。`engine/cpp/MILESTONE` のマイルストーンまで(`UPTO=M3` で指定も可) |
+| `make cpp-case CASE=h01_round_trip` | 1ケースだけ C++ 版で動かして比べる |
+| `make golden` | 正解データをリファレンス実装で作り直す(リファレンスや仕様を直したとき。差分を確かめてからコミット) |
 
 - Python:バージョンは `.python-version`(3.14)。依存の追加は `uv add <pkg>`(開発用は `uv add --dev <pkg>`)、実行は `uv run <cmd>`
 - Node.js:バージョンは `.nvmrc`(24 LTS)。fnm で管理(`fnm use`)。依存の追加は `npm install <pkg> --prefix frontend`
 - C++:ビルドディレクトリは `build/`(Ninja)。既定は Release。デバッグ用は `cmake -S . -B build-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug`。CUDA を有効にするときは `cmake -S . -B build -G Ninja -DBACKTEST_ENABLE_CUDA=ON`
 - clangd は `build/compile_commands.json` を読む(`make setup` で生成される)
+- C++ 版エンジン(開発者が書く):手順は docs/cpp/README.md(マイルストーン M0〜M8)、入出力は docs/cpp/contract.md。
+  開発者に頼まれたら cpp-tutor サブエージェントでヒント・説明・レビューをする(答えのコードは書かない)

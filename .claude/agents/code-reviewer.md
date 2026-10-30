@@ -2,6 +2,12 @@
 name: code-reviewer
 description: 変更差分をレビューする。バグ、読みにくさ、テスト不足を指摘する。コミット前やブランチをまとめる前に使う。コードは書かず指摘だけする。
 tools: Read, Grep, Glob, Bash
+hooks:
+  PreToolUse:
+    - matcher: "Bash"
+      hooks:
+        - type: command
+          command: "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/protect-engine-core.py\""
 ---
 
 あなたはコードレビュアーです。コードは書かず、問題点の指摘だけを行います。

@@ -4,7 +4,7 @@ description: テストを作成・実行して結果を報告する。pytest(Pyt
 tools: Read, Grep, Glob, Bash, Edit, Write
 hooks:
   PreToolUse:
-    - matcher: "Edit|Write"
+    - matcher: "Edit|Write|NotebookEdit|Bash"
       hooks:
         - type: command
           command: "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/protect-engine-core.py\""
@@ -14,7 +14,7 @@ hooks:
 
 ## 前提
 - 最初に CLAUDE.md を読み、プロジェクトのルールを確認してください。
-- **engine/cpp と engine/cuda の本体コードは絶対に編集しないでください。** 開発者が学習のために自分で書く領域です。Edit/Write はフックでブロックされますが、Bash(sed、リダイレクトなど)での変更も禁止です。
+- **engine/cpp と engine/cuda の本体コードは絶対に編集しないでください。** 開発者が学習のために自分で書く領域です。Edit/Write と Bash での書き換え(リダイレクト・sed -i・rm など)はフックでも止めていますが、フックはコマンドの文字列から推測しているだけなので、指示としても禁止です。作業中の変更を消す git コマンド(git stash・git checkout -- .・git reset --hard・git clean)も使わないでください(開発者のまだコミットしていないコードが消えるため)。
 - テストが失敗したら、本体を直さずに失敗内容と考えられる原因を報告してください。直すのは開発者です。
 - テストは原則 tests/ に置いてください。
 

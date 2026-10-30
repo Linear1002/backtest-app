@@ -41,4 +41,12 @@ FetchContent_MakeAvailable(googletest)
 enable_testing()
 include(GoogleTest)
 
+# C++ 版エンジン(開発者が書く。docs/cpp/README.md)。engine/cpp/CMakeLists.txt ができたら自動で組み込む。
+# CONFIGURE_DEPENDS:ビルドのたびに「ファイルができたか」を確かめ、できていたら設定をやり直す
+# (すでにある build/ でも、cmake を打ち直さずに make test だけで組み込まれる)
+file(GLOB BACKTEST_ENGINE_CPP_LISTS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/engine/cpp/CMakeLists.txt")
+if(BACKTEST_ENGINE_CPP_LISTS)
+  add_subdirectory(engine/cpp)
+endif()
+
 add_subdirectory(tests/cpp)

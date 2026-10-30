@@ -1,0 +1,2 @@
+date,signal_date,side,open_price,fill_price,shares,notional,fee,cash_after
+2025-01-10,2025-01-09,buy,103.0,103.0,9700,999100.0,0.0,900.0
