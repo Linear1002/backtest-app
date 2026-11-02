@@ -6,28 +6,41 @@
 import type { ParamKey, Params, ParamSpec } from "./api.ts";
 import { numberText, toNumber } from "./numbers.ts";
 import { DEFAULT_SWEEP_FORM, type SweepFieldKey, type SweepForm } from "./sweep.ts";
+import { DEFAULT_WALKFORWARD_FORM, type WalkForwardFieldKey, type WalkForwardForm } from "./walkforward.ts";
 
 export { numberText, toNumber } from "./numbers.ts";
 
-/** 1組の日数で試す(single)か、日数の組み合わせを総当たりで比べる(sweep。docs/sweep.md)か */
-export type RunMode = "single" | "sweep";
+/**
+ * 1組の日数で試す(single)か、日数の組み合わせを総当たりで比べる(sweep。docs/sweep.md)か、
+ * 総当たりで選び直しながら進める(walkforward。docs/walkforward.md)か
+ */
+export type RunMode = "single" | "sweep" | "walkforward";
 
 export type FormState = {
   start_date: string;
   end_date: string;
   params: Record<ParamKey, string>;
   mode: RunMode;
-  /** 総当たりの格子と検証期間(mode が sweep のときに使う) */
+  /** 総当たりの格子と検証期間(mode が sweep のときに使う。格子は walkforward でも使う) */
   sweep: SweepForm;
+  /** ウォークフォワード分析の基準・選ぶ期間・使う期間(mode が walkforward のときに使う) */
+  walk: WalkForwardForm;
 };
 
-export type FieldKey = ParamKey | "start_date" | "end_date" | SweepFieldKey;
+export type FieldKey = ParamKey | "start_date" | "end_date" | SweepFieldKey | WalkForwardFieldKey;
 export type FieldErrors = Partial<Record<FieldKey, string>>;
 
 export function defaultForm(specs: ParamSpec[], range: { first_date: string; last_date: string }): FormState {
   const params = {} as Record<ParamKey, string>;
   for (const spec of specs) params[spec.key] = String(spec.default);
-  return { start_date: range.first_date, end_date: range.last_date, params, mode: "single", sweep: { ...DEFAULT_SWEEP_FORM } };
+  return {
+    start_date: range.first_date,
+    end_date: range.last_date,
+    params,
+    mode: "single",
+    sweep: { ...DEFAULT_SWEEP_FORM },
+    walk: { ...DEFAULT_WALKFORWARD_FORM },
+  };
 }
 
 function checkSpec(spec: ParamSpec, value: number): string | null {

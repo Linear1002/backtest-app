@@ -171,7 +171,13 @@ export type NoteKind =
   | "no_holdout"
   | "aligned_start"
   | "sampling_error"
-  | "benchmark";
+  | "benchmark"
+  | "walkforward_trials"
+  | "walkforward_stitching"
+  | "walkforward_liquidation"
+  | "walkforward_unused"
+  | "walkforward_ties"
+  | "walkforward_no_choice";
 
 export type SkippedOrder = {
   date: string;
@@ -380,6 +386,111 @@ export type SweepStatus = {
   error: { detail: string; errors: ErrorItem[] } | null;
 };
 
+// --- ウォークフォワード分析(docs/walkforward.md。backend/api/schemas.py の WalkForward*) ------------
+
+/** 1位を選ぶ基準(最大ドローダウンは選べない。docs/walkforward.md 2章) */
+export type WalkForwardObjective = "sharpe_ratio" | "total_return";
+
+export type WalkForwardRequest = {
+  symbol_id: string;
+  strategy_id: string;
+  engine: string;
+  start_date: string;
+  end_date: string;
+  grid: SweepGrid;
+  params: Record<CostKey, number>;
+  objective: WalkForwardObjective;
+  /** 選ぶ期間の長さ(か月) */
+  in_sample_months: number;
+  /** 使う期間の長さ(か月) */
+  out_of_sample_months: number;
+};
+
+export type WalkForwardPeriod = {
+  start_date: string;
+  end_date: string;
+  first_business_day: string;
+  last_business_day: string;
+  business_days: number;
+};
+
+export type WalkForwardWindow = {
+  /** 区切りの番号(1から) */
+  index: number;
+  /** 暦で決めた選ぶ期間の始まり(始まりをそろえる前) */
+  requested_in_sample_start: string;
+  /** 選ぶ期間(始まりをそろえたあと) */
+  in_sample: WalkForwardPeriod;
+  /** 使う期間 */
+  out_of_sample: WalkForwardPeriod;
+  /** 選んだ組み合わせ。すべて算出不可で選ばなかったときは null(その使う期間は現金のまま) */
+  chosen: { short_window: number; long_window: number } | null;
+  /** 選んだ組み合わせの、選ぶ期間の基準の値 */
+  in_sample_value: number | null;
+  /** 1位と同じ値だった組み合わせの数(1なら同率なし) */
+  tie_count: number;
+  /** この使う期間の初期資金(前の区切りの清算したあとの額) */
+  starting_cash: number;
+  out_of_sample_metrics: SweepMetrics;
+  ended_with_shares: boolean;
+  /** 使う期間の最後の資産(清算する前) */
+  final_equity: number;
+  /** 清算したあとの額 */
+  liquidated_equity: number;
+  /** この使う期間だけの買い持ちの総リターン。買えなかったときは null(比べない) */
+  benchmark_total_return: number | null;
+};
+
+export type WalkForwardDay = {
+  date: string;
+  /** つないだ資産額(区切りの最終日は清算したあとの額) */
+  equity: number;
+  /** つないだ期間全体の買い持ちの資産額 */
+  benchmark_equity: number;
+};
+
+export type WalkForwardResult = {
+  symbol: SymbolSummary;
+  strategy_id: string;
+  engine: SweepEngineInfo;
+  grid: SweepResult["grid"];
+  params: SweepResult["params"];
+  objective: WalkForwardObjective;
+  in_sample_months: number;
+  out_of_sample_months: number;
+  /** 試した組み合わせの数(格子) */
+  count: number;
+  /** 計算した回数(組み合わせの数 × 区切りの数 + 区切りの数) */
+  runs: number;
+  windows: WalkForwardWindow[];
+  daily: WalkForwardDay[];
+  metrics: {
+    total_return: number;
+    annualized_return: number | null;
+    max_drawdown: number;
+    sharpe_ratio: number | null;
+    return_count: number;
+    /** 最後の資産(清算する前) */
+    final_equity: number;
+    /** 最後の区切りの最終日に清算したあとの額 */
+    liquidated_equity: number;
+  };
+  /** つないだ期間全体の買い持ち */
+  benchmark: Benchmark;
+  /** 選んだ組み合わせが、前の区切りから変わった回数 */
+  choice_changes: number;
+  /** 買い持ちと比べた区切りの数(買い持ちを買えた区切り) */
+  compared_windows: number;
+  /** そのうち、使う期間で買い持ちを上回った区切りの数 */
+  beats_benchmark: number;
+  /** 最後の区切りのあとに残り、使わなかった日 */
+  unused: { start_date: string; end_date: string; business_days: number } | null;
+  notes: { kind: NoteKind; message: string }[];
+  data_info: DataInfo;
+};
+
+export type WalkForwardStatus = Omit<SweepStatus, "result"> & { result: WalkForwardResult | null };
+
 export class ApiError extends Error {
   readonly status: number;
   readonly errors: ErrorItem[];
@@ -465,6 +576,11 @@ export function createApi(fetchImpl: Fetch = (input, init) => fetch(input, init)
     sweepStatus: (id: string) => request<SweepStatus>(`/api/sweeps/${encodeURIComponent(id)}`),
     cancelSweep: (id: string) =>
       request<SweepStatus>(`/api/sweeps/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    startWalkForward: (body: WalkForwardRequest) =>
+      request<WalkForwardStatus>("/api/walkforwards", { method: "POST", body: JSON.stringify(body) }),
+    walkForwardStatus: (id: string) => request<WalkForwardStatus>(`/api/walkforwards/${encodeURIComponent(id)}`),
+    cancelWalkForward: (id: string) =>
+      request<WalkForwardStatus>(`/api/walkforwards/${encodeURIComponent(id)}`, { method: "DELETE" }),
   };
 }
 

@@ -13,6 +13,8 @@
 //   「総当たりの結果に戻る」で、総当たりを実行したときの条件と、結果の画面の見方(並べる基準など)に戻す
 // - 「詳しく見る」で開いた1組の条件には、出どころ(どの総当たりの、どの期間か)を記録しておき、その条件で実行した結果に引き継ぐ。
 //   自分で同じ条件を入れただけの結果には付けない
+// - 「ウォークフォワードで確かめる」(docs/walkforward.md)は、総当たりと同じ格子・費用を使い、同じジョブの仕組みで動く。
+//   結果は総当たりとも別に覚えておく
 
 import {
   ApiError,
@@ -31,6 +33,8 @@ import {
   type SweepSegment,
   type SymbolDetail,
   type SymbolSummary,
+  type WalkForwardRequest,
+  type WalkForwardResult,
 } from "./api.ts";
 import {
   defaultForm,
@@ -42,6 +46,7 @@ import {
   type RunMode,
 } from "./form.ts";
 import { GRID_KEYS, holdoutStart, parseSweepGrid, rankingFor, uniqueBest, validateHoldout } from "./sweep.ts";
+import { maxRuns, settingsErrors, validateWalkForward } from "./walkforward.ts";
 
 export type StepId = 1 | 2 | 3 | 4 | 5;
 
@@ -83,6 +88,15 @@ export type SweepRecord = {
   form: FormState;
 };
 
+/** ウォークフォワード分析の結果と、そのときの条件。 */
+export type WalkForwardRecord = {
+  id: number;
+  request: WalkForwardRequest;
+  result: WalkForwardResult;
+  /** 計算にかかった時間(ミリ秒) */
+  elapsedMs: number | null;
+};
+
 /** 総当たりの結果の画面の見方。1組の結果を見てから戻ってきたときも、そのまま残す。 */
 export type SweepViewState = {
   /** 並べる基準(色を付ける値) */
@@ -93,7 +107,7 @@ export type SweepViewState = {
   selected: number | null;
 };
 
-/** 実行中のもの。総当たりは、API のジョブの id と途中経過(終わった組み合わせの数)も持つ */
+/** 実行中のもの。総当たり・ウォークフォワードは、API のジョブの id と途中経過(終わった組み合わせの数)も持つ */
 export type Running =
   | { id: number; kind: "single"; request: BacktestRequest; origin: SweepOrigin | null }
   | {
@@ -102,6 +116,14 @@ export type Running =
       request: SweepRequest;
       /** 実行を始めたときの入力欄 */
       form: FormState;
+      jobId: string | null;
+      done: number;
+      total: number;
+    }
+  | {
+      id: number;
+      kind: "walkforward";
+      request: WalkForwardRequest;
       jobId: string | null;
       done: number;
       total: number;
@@ -136,10 +158,11 @@ export type FlowState = {
 
   running: Running | null;
   runError: string | null;
-  /** 総当たりを中止したところ(確認の画面に、エラーではない知らせとして出す) */
-  sweepCancelled: boolean;
+  /** 総当たり・ウォークフォワードを中止したところ(確認の画面に、エラーではない知らせとして出す) */
+  jobCancelled: boolean;
   last: RunRecord | null;
   lastSweep: SweepRecord | null;
+  lastWalk: WalkForwardRecord | null;
   sweepView: SweepViewState;
   /** 総当たりの「詳しく見る」で作った1組の条件(その条件のまま実行したら、結果に出どころを書く) */
   inspected: InspectRecord | null;
@@ -174,6 +197,11 @@ export type FlowAction =
   | { type: "sweepSucceeded"; id: number; result: SweepResult; elapsedMs: number | null }
   | { type: "sweepFailed"; id: number; message: string | null; fieldErrors: FieldErrors }
   | { type: "sweepCancelled"; id: number }
+  | { type: "walkStarted"; id: number; request: WalkForwardRequest }
+  | { type: "walkProgress"; id: number; jobId: string; done: number; total: number }
+  | { type: "walkSucceeded"; id: number; result: WalkForwardResult; elapsedMs: number | null }
+  | { type: "walkFailed"; id: number; message: string | null; fieldErrors: FieldErrors }
+  | { type: "walkCancelled"; id: number }
   /** 総当たりの結果の画面の見方を変える(並べる基準・色を付ける期間・選んだ組み合わせ) */
   | { type: "sweepView"; view: Partial<SweepViewState> }
   /** 総当たりの結果から、1つの組み合わせを、その期間の通常のバックテストで詳しく見る */
@@ -198,9 +226,10 @@ export const initialFlow: FlowState = {
   sweepEngine: "python",
   running: null,
   runError: null,
-  sweepCancelled: false,
+  jobCancelled: false,
   last: null,
   lastSweep: null,
+  lastWalk: null,
   sweepView: { objective: "sharpe_ratio", segment: "in_sample", selected: null },
   inspected: null,
   animated: null,
@@ -226,7 +255,7 @@ function specsOf(state: FlowState): ParamSpec[] | null {
   return selectedStrategy(state)?.params ?? null;
 }
 
-/** いまの実行のしかた(1組 / 総当たり)。入力欄がまだなければ 1組。 */
+/** いまの実行のしかた(1組 / 総当たり / ウォークフォワード)。入力欄がまだなければ 1組。 */
 export function runMode(state: FlowState): RunMode {
   return state.form?.mode ?? "single";
 }
@@ -234,6 +263,12 @@ export function runMode(state: FlowState): RunMode {
 /** 総当たりに使うエンジン。一覧がまだない・知らないエンジンなら null。 */
 export function sweepEngineInfo(state: FlowState): SweepEngineInfo | null {
   return state.catalog?.meta.sweep_engines.find((e) => e.id === state.sweepEngine) ?? null;
+}
+
+/** ウォークフォワードの計算の量の上限(組み合わせの数 × 区切りの数)。エンジンが分からなければ null。 */
+export function walkForwardLimit(state: FlowState): number | null {
+  const engine = sweepEngineInfo(state);
+  return engine ? maxRuns(engine.max_pairs) : null;
 }
 
 /**
@@ -254,13 +289,32 @@ export function holdoutOf(form: FormState): string | null {
   return holdoutStart(form, form.sweep.holdout, form.sweep.holdout_date);
 }
 
-/** いまの入力の誤り(パラメータと期間。総当たりなら格子と検証期間も)。誤りがなければ空。 */
+/**
+ * いまの入力の誤り(パラメータと期間。総当たりなら格子と検証期間も、ウォークフォワードなら格子・設定・区切りも)。
+ * 誤りがなければ空。
+ */
 export function formErrors(state: FlowState): FieldErrors {
   const specs = specsOf(state);
   const form = state.form;
   if (!form || !state.detail || !specs) return {};
   const period = validatePeriod(form, state.detail.range);
   if (form.mode === "single") return { ...parseParams(form, specs).errors, ...period };
+  if (form.mode === "walkforward") {
+    // 組み合わせの数の上限は、区切りの数をかけた計算の量で確かめる(docs/walkforward.md 9章)
+    const grid = parseSweepGrid(form.sweep, null);
+    const settings = settingsErrors(form.walk);
+    const errors: FieldErrors = {
+      ...grid.errors,
+      ...parseParams(form, specs, COST_KEYS).errors,
+      ...settings,
+      ...period,
+    };
+    // 区切りと計算の量は、期間・格子・設定が正しいときだけ確かめる(先にそちらを直してもらう)
+    if (grid.pairs !== null && grid.grid && Object.keys(period).length === 0 && Object.keys(settings).length === 0) {
+      Object.assign(errors, validateWalkForward(form.walk, form, grid.pairs, walkForwardLimit(state)).errors);
+    }
+    return errors;
+  }
   const errors: FieldErrors = {
     ...parseSweepGrid(form.sweep, sweepEngineInfo(state)?.max_pairs ?? null).errors,
     ...parseParams(form, specs, COST_KEYS).errors,
@@ -315,6 +369,33 @@ export function currentSweepRequest(state: FlowState): SweepRequest | null {
   };
 }
 
+/** いまの条件でウォークフォワード分析を実行するときのリクエスト。条件がそろっていない・誤りがあるときは null。 */
+export function currentWalkForwardRequest(state: FlowState): WalkForwardRequest | null {
+  const strategy = usableStrategy(state);
+  const form = state.form;
+  if (!form || !state.detail || !strategy || form.mode !== "walkforward") return null;
+  if (Object.keys(formErrors(state)).length > 0) return null;
+  const { grid } = parseSweepGrid(form.sweep, null);
+  const { params } = parseParams(form, strategy.params, COST_KEYS);
+  if (!grid || !params) return null;
+  return {
+    symbol_id: state.detail.symbol.id,
+    strategy_id: strategy.id,
+    engine: state.sweepEngine,
+    start_date: form.start_date,
+    end_date: form.end_date,
+    grid,
+    params: {
+      fee_rate_pct: params.fee_rate_pct,
+      slippage_rate_pct: params.slippage_rate_pct,
+      initial_cash: params.initial_cash,
+    },
+    objective: form.walk.objective,
+    in_sample_months: form.walk.in_sample_months,
+    out_of_sample_months: form.walk.out_of_sample_months,
+  };
+}
+
 export function sameRequest(a: BacktestRequest | null, b: BacktestRequest | null): boolean {
   if (!a || !b) return false;
   if (
@@ -345,17 +426,56 @@ export function sameSweepRequest(a: SweepRequest | null, b: SweepRequest | null)
   );
 }
 
-/** いまの実行のしかたで、実行できる条件がそろっているか。 */
-function readyToRun(state: FlowState): boolean {
-  return runMode(state) === "sweep" ? currentSweepRequest(state) !== null : currentRequest(state) !== null;
+export function sameWalkForwardRequest(a: WalkForwardRequest | null, b: WalkForwardRequest | null): boolean {
+  if (!a || !b) return false;
+  return (
+    a.symbol_id === b.symbol_id &&
+    a.strategy_id === b.strategy_id &&
+    a.engine === b.engine &&
+    a.start_date === b.start_date &&
+    a.end_date === b.end_date &&
+    a.objective === b.objective &&
+    a.in_sample_months === b.in_sample_months &&
+    a.out_of_sample_months === b.out_of_sample_months &&
+    GRID_KEYS.every((key) => a.grid[key] === b.grid[key]) &&
+    COST_KEYS.every((key) => a.params[key] === b.params[key])
+  );
 }
 
-/** いまの条件で出した結果があるか(1組なら last、総当たりなら lastSweep)。 */
-function hasCurrentResult(state: FlowState): boolean {
-  if (runMode(state) === "sweep") {
-    return state.lastSweep !== null && sameSweepRequest(state.lastSweep.request, currentSweepRequest(state));
+/** いまの実行のしかたで、実行できる条件がそろっているか。 */
+function readyToRun(state: FlowState): boolean {
+  switch (runMode(state)) {
+    case "single":
+      return currentRequest(state) !== null;
+    case "sweep":
+      return currentSweepRequest(state) !== null;
+    case "walkforward":
+      return currentWalkForwardRequest(state) !== null;
   }
-  return state.last !== null && sameRequest(state.last.request, currentRequest(state));
+}
+
+/** いまの実行のしかたの、前に出した結果(1組なら last、総当たりなら lastSweep、ウォークフォワードなら lastWalk)があるか。 */
+function hasPreviousResult(state: FlowState): boolean {
+  switch (runMode(state)) {
+    case "single":
+      return state.last !== null;
+    case "sweep":
+      return state.lastSweep !== null;
+    case "walkforward":
+      return state.lastWalk !== null;
+  }
+}
+
+/** いまの条件で出した結果があるか。 */
+function hasCurrentResult(state: FlowState): boolean {
+  switch (runMode(state)) {
+    case "single":
+      return state.last !== null && sameRequest(state.last.request, currentRequest(state));
+    case "sweep":
+      return state.lastSweep !== null && sameSweepRequest(state.lastSweep.request, currentSweepRequest(state));
+    case "walkforward":
+      return state.lastWalk !== null && sameWalkForwardRequest(state.lastWalk.request, currentWalkForwardRequest(state));
+  }
 }
 
 /** その手順に移れるか(手順の表示・条件票から移るときに使う)。実行中は、いまの手順以外には移れない。 */
@@ -377,8 +497,7 @@ export function canVisit(state: FlowState, step: StepId): boolean {
 
 /** いまの条件は、前に出した結果の条件と違うか(確認の画面で「もう一度実行すると新しい結果になる」と伝える)。 */
 export function resultIsOutdated(state: FlowState): boolean {
-  const previous = runMode(state) === "sweep" ? state.lastSweep : state.last;
-  return previous !== null && !hasCurrentResult(state);
+  return hasPreviousResult(state) && !hasCurrentResult(state);
 }
 
 /** 1組の画面(確認・結果)から、総当たりの結果へ戻れるか。戻ると、総当たりを実行したときの条件になる。 */
@@ -420,8 +539,26 @@ export function showSweepReplacesInput(state: FlowState): boolean {
 
 // --- 実行のエラーの振り分け ---------------------------------------------------------
 
-/** 入力欄のある項目(条件の項目と期間。総当たりなら格子と検証期間も)。API のエラーのうち、これに当たるものは欄に出す。 */
-function formFields(request: BacktestRequest | SweepRequest): Set<string> {
+type AnyRequest = BacktestRequest | SweepRequest | WalkForwardRequest;
+
+/**
+ * 入力欄のある項目(条件の項目と期間。総当たりなら格子と検証期間も、ウォークフォワードなら格子・設定・区切りも)。
+ * API のエラーのうち、これに当たるものは欄に出す。
+ */
+function formFields(request: AnyRequest): Set<string> {
+  if ("in_sample_months" in request) {
+    return new Set<string>([
+      ...GRID_KEYS,
+      "grid",
+      ...COST_KEYS,
+      "start_date",
+      "end_date",
+      "objective",
+      "in_sample_months",
+      "out_of_sample_months",
+      "windows",
+    ]);
+  }
   if ("grid" in request) {
     return new Set<string>([...GRID_KEYS, "grid", "holdout_start_date", ...COST_KEYS, "start_date", "end_date"]);
   }
@@ -429,7 +566,7 @@ function formFields(request: BacktestRequest | SweepRequest): Set<string> {
 }
 
 /** API のエラーのうち、入力欄に出せるものだけを取り出す。ApiError 以外は空。 */
-export function fieldErrorsFrom(error: unknown, request: BacktestRequest | SweepRequest): FieldErrors {
+export function fieldErrorsFrom(error: unknown, request: AnyRequest): FieldErrors {
   if (!(error instanceof ApiError)) return {};
   const known = formFields(request);
   const picked: FieldErrors = {};
@@ -445,7 +582,7 @@ export function fieldErrorsFrom(error: unknown, request: BacktestRequest | Sweep
  */
 export function runErrorMessage(
   error: unknown,
-  request: BacktestRequest | SweepRequest,
+  request: AnyRequest,
   fallback = "バックテストを実行できませんでした",
 ): string {
   const base = errorMessage(error, fallback);
@@ -465,7 +602,7 @@ export function runErrorMessage(
  * 欄に出せる誤りと一緒に返ってきた、欄に出せない誤り(戦略・エンジンなど)の文。なければ null。
  * 条件の画面に戻るときに、欄の誤りとは別に画面の上に出す。
  */
-export function unplacedErrorMessage(error: unknown, request: BacktestRequest | SweepRequest): string | null {
+export function unplacedErrorMessage(error: unknown, request: AnyRequest): string | null {
   if (!(error instanceof ApiError)) return null;
   const known = formFields(request);
   const hasUnplaced = error.errors.some((e) => e.field !== null && !known.has(e.field) && e.message);
@@ -499,10 +636,16 @@ const DEPENDS_ON: Partial<Record<FieldKey, readonly string[]>> = {
   end_date: ["start_date"],
   short_min: ["short_max"],
   long_min: ["long_max"],
-  // 「組み合わせがない・多すぎる」と、API の「ウォームアップを除くと期間が短すぎる」(docs/sweep.md 5章の5)
-  grid: [...GRID_KEYS, "start_date", "end_date"],
+  // 「組み合わせがない・多すぎる」と、API の「ウォームアップを除くと期間が短すぎる」(docs/sweep.md 5章の5)。
+  // ウォークフォワードの「計算が多すぎる」は区切りの数にも左右される(docs/walkforward.md 7章の7)
+  grid: [...GRID_KEYS, "start_date", "end_date", "in_sample_months", "out_of_sample_months"],
   // 検証期間の開始日の誤りは、期間と、いちばん長い長期日数(選ぶ期間の始まりをそろえる日数)にも左右される
   holdout_start_date: ["start_date", "end_date", ...GRID_KEYS],
+  // ウォークフォワードの「区切りが作れない」(7章の6)
+  windows: ["start_date", "end_date", "in_sample_months", "out_of_sample_months"],
+  // API の「ウォームアップを除くと、区切り k の選ぶ期間が3営業日未満」「区切り k の使う期間が3営業日未満」(7章の6)
+  in_sample_months: ["start_date", "end_date", "out_of_sample_months", ...GRID_KEYS],
+  out_of_sample_months: ["start_date", "end_date", "in_sample_months"],
 };
 
 /** 誤りを左右する入力の値(変わったかどうかを比べるためだけに使う)。 */
@@ -510,6 +653,10 @@ function fieldValue(form: FormState | null, key: string): string | undefined {
   if (!form) return undefined;
   if (key === "start_date" || key === "end_date") return form[key];
   if (key === "holdout_start_date") return `${form.sweep.holdout}|${form.sweep.holdout_date}`;
+  if (key === "objective") return form.walk.objective;
+  if (key === "in_sample_months" || key === "out_of_sample_months") return String(form.walk[key]);
+  // 「区切りが作れない」も、どの欄のものでもない(DEPENDS_ON の入力が変わったら確かめ直す)
+  if (key === "windows") return "";
   // 「組み合わせがない・多すぎる」は、どの欄のものでもない。格子のどれかが変わったら、もう一度確かめて決める(DEPENDS_ON)
   if (key === "grid") return "";
   const gridKey = GRID_KEYS.find((k) => k === key);
@@ -614,7 +761,7 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
         // 前の銘柄の入力エラー・実行エラーは、新しい銘柄には当てはまらない
         fieldErrors: {},
         runError: null,
-        sweepCancelled: false,
+        jobCancelled: false,
         inspected: null,
       };
     }
@@ -671,7 +818,7 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
         ...next,
         fieldErrors: clearChangedErrors(state.fieldErrors, state.form, action.form, formErrors(next)),
         runError: null,
-        sweepCancelled: false,
+        jobCancelled: false,
       };
     }
 
@@ -683,7 +830,7 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
         form: { ...state.form, mode: action.mode },
         fieldErrors: {},
         runError: null,
-        sweepCancelled: false,
+        jobCancelled: false,
       };
     }
 
@@ -693,7 +840,7 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
       if (Object.keys(errors).length > 0) {
         return { ...state, fieldErrors: errors, focus: focus(state, "error") };
       }
-      return moveTo({ ...state, fieldErrors: {}, runError: null, sweepCancelled: false }, 4);
+      return moveTo({ ...state, fieldErrors: {}, runError: null, jobCancelled: false }, 4);
     }
 
     case "selectEngine":
@@ -735,7 +882,7 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
         ...state,
         running: { id: action.id, kind: "sweep", request: action.request, form: state.form, jobId: null, done: 0, total: 0 },
         runError: null,
-        sweepCancelled: false,
+        jobCancelled: false,
       };
     }
 
@@ -771,7 +918,43 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
     case "sweepCancelled": {
       if (state.running?.kind !== "sweep" || state.running.id !== action.id) return state;
       // 押した「中止する」ボタンは消えるので、中止したという知らせにフォーカスを移す
-      return { ...state, running: null, sweepCancelled: true, focus: focus(state, "notice") };
+      return { ...state, running: null, jobCancelled: true, focus: focus(state, "notice") };
+    }
+
+    case "walkStarted": {
+      if (state.running || !sameWalkForwardRequest(action.request, currentWalkForwardRequest(state))) return state;
+      return {
+        ...state,
+        running: { id: action.id, kind: "walkforward", request: action.request, jobId: null, done: 0, total: 0 },
+        runError: null,
+        jobCancelled: false,
+      };
+    }
+
+    case "walkProgress": {
+      if (state.running?.kind !== "walkforward" || state.running.id !== action.id) return state;
+      return { ...state, running: { ...state.running, jobId: action.jobId, done: action.done, total: action.total } };
+    }
+
+    case "walkSucceeded": {
+      if (state.running?.kind !== "walkforward" || state.running.id !== action.id) return state;
+      const lastWalk: WalkForwardRecord = {
+        id: action.id,
+        request: state.running.request,
+        result: action.result,
+        elapsedMs: action.elapsedMs,
+      };
+      return moveTo({ ...state, running: null, lastWalk }, 5);
+    }
+
+    case "walkFailed": {
+      if (state.running?.kind !== "walkforward" || state.running.id !== action.id) return state;
+      return failRun(state, action.message, action.fieldErrors);
+    }
+
+    case "walkCancelled": {
+      if (state.running?.kind !== "walkforward" || state.running.id !== action.id) return state;
+      return { ...state, running: null, jobCancelled: true, focus: focus(state, "notice") };
     }
 
     case "sweepView":
@@ -813,7 +996,7 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
         sweepEngine: state.lastSweep.request.engine,
         fieldErrors: {},
         runError: null,
-        sweepCancelled: false,
+        jobCancelled: false,
       };
       // 1組の結果(手順5)から戻るときも手順5のままなので、moveTo はフォーカスを動かさない。
       // 押したボタンは画面ごと消えるので、ここで見出しにフォーカスを移す

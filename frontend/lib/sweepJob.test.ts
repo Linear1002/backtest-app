@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { ApiError, type SweepRequest, type SweepStatus } from "./api.ts";
-import { runSweepJob, type SweepJobApi } from "./sweepJob.ts";
-import { sweepResult } from "./testing.ts";
+import { ApiError, type SweepRequest, type SweepStatus, type WalkForwardRequest, type WalkForwardStatus } from "./api.ts";
+import { runSweepJob, runWalkForwardJob, type SweepJobApi, type WalkForwardJobApi } from "./sweepJob.ts";
+import { sweepResult, walkForwardResult } from "./testing.ts";
 
 const REQUEST = { symbol_id: "DEMO:1001" } as SweepRequest;
 
@@ -124,4 +124,51 @@ test("中止・ジョブの失敗・始められないとき", async () => {
   assert.equal(start.kind, "error");
   assert.equal(start.kind === "error" && start.error, rejected);
   assert.equal(calls.cancels, 0); // ジョブはできていない
+});
+
+test("ウォークフォワード分析も同じ仕組みで、ウォークフォワードの URL を呼ぶ(中止も)", async () => {
+  const calls: string[] = [];
+  const walk = (state: WalkForwardStatus["status"], done = 0, extra: Partial<WalkForwardStatus> = {}): WalkForwardStatus => ({
+    id: "walk-1",
+    status: state,
+    done,
+    total: 4,
+    elapsed_ms: null,
+    result: null,
+    error: null,
+    ...extra,
+  });
+  const polls = [walk("running", 2), walk("done", 4, { result: walkForwardResult("DEMO:1001"), elapsed_ms: 900 })];
+  const api: WalkForwardJobApi = {
+    startWalkForward: async () => {
+      calls.push("start");
+      return walk("running");
+    },
+    walkForwardStatus: async (id) => {
+      calls.push(`status ${id}`);
+      return polls.shift()!;
+    },
+    cancelWalkForward: async (id) => {
+      calls.push(`cancel ${id}`);
+      return walk("cancelled");
+    },
+  };
+  const progress: number[] = [];
+  const base = { api, wait: async () => undefined, onProgress: (s: WalkForwardStatus) => progress.push(s.done) };
+  const outcome = await runWalkForwardJob({ symbol_id: "DEMO:1001" } as WalkForwardRequest, { ...base, isCurrent: () => true });
+  assert.equal(outcome.kind, "done");
+  assert.equal(outcome.kind === "done" && outcome.status.result?.windows.length, 2);
+  assert.deepEqual(progress, [0, 2]);
+  assert.deepEqual(calls, ["start", "status walk-1", "status walk-1"]);
+
+  // 画面を閉じたら中止を頼む
+  calls.length = 0;
+  const stopped = await runWalkForwardJob({ symbol_id: "DEMO:1001" } as WalkForwardRequest, { ...base, isCurrent: () => false });
+  assert.equal(stopped.kind, "stopped");
+  assert.deepEqual(calls, ["start", "cancel walk-1"]);
+
+  // 失敗の文がないときは、ウォークフォワードの文にする
+  const failedApi: WalkForwardJobApi = { ...api, startWalkForward: async () => walk("failed") };
+  const failed = await runWalkForwardJob({ symbol_id: "DEMO:1001" } as WalkForwardRequest, { ...base, api: failedApi, isCurrent: () => true });
+  assert.deepEqual(failed, { kind: "failed", message: "ウォークフォワード分析を実行できませんでした" });
 });

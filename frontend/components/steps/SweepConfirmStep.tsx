@@ -6,8 +6,8 @@ import type { Strategy, SweepEngineInfo, SweepRequest, SymbolDetail } from "@/li
 import { describeYen, formatDate, formatRatePct, formatYen } from "@/lib/format.ts";
 import { dayBefore, longestWindow, pairCount } from "@/lib/sweep.ts";
 
-import { Seal } from "../Seal.tsx";
-import { SecondaryButton, StepHeading } from "../ui.tsx";
+import { StepHeading } from "../ui.tsx";
+import { EngineChoice, JobStatusAndRun } from "./JobParts.tsx";
 
 const count = new Intl.NumberFormat("ja-JP");
 
@@ -21,9 +21,6 @@ function assumptions(longest: number): string[] {
     "当日の終値でシグナルを判定し、次に売買が成立した日の始値で約定します。配当・税金・ストップ高やストップ安は考えません。",
   ];
 }
-
-/** 読み上げで知らせる区切り(途中経過の数字が変わるたびには読み上げない)。 */
-const MILESTONES = ["計算を始めました", "4分の1まで終わりました", "半分まで終わりました", "4分の3まで終わりました"];
 
 export function SweepConfirmStep({
   detail,
@@ -79,8 +76,6 @@ export function SweepConfirmStep({
     ["初期資金", `${formatYen(request.params.initial_cash)}(${describeYen(request.params.initial_cash)})`],
     ["売買単位", `${detail.market.lot_size}株`],
   ];
-  const ratio = progress && progress.total > 0 ? progress.done / progress.total : 0;
-  const milestone = MILESTONES[Math.min(MILESTONES.length - 1, Math.floor(ratio * 4))];
 
   return (
     <section aria-labelledby={headingId}>
@@ -118,99 +113,20 @@ export function SweepConfirmStep({
         </div>
       </div>
 
-      <fieldset className="mt-8">
-        <legend className="text-[15px] font-bold text-ink">計算エンジン</legend>
-        <div className="mt-2 flex flex-wrap gap-3">
-          {engines.map((e) => (
-            <label
-              key={e.id}
-              className={`flex min-w-[15rem] items-start gap-2 rounded-md border px-3 py-2 text-[14px] ${
-                e.available ? "cursor-pointer border-rule bg-surface" : "cursor-not-allowed border-dashed border-rule text-ink-3"
-              } ${request.engine === e.id ? "border-ink" : ""}`}
-            >
-              <input
-                type="radio"
-                name="sweep-engine"
-                value={e.id}
-                checked={request.engine === e.id}
-                disabled={!e.available || running}
-                onChange={() => onEngineChange(e.id)}
-                className="mt-1.5 accent-[var(--ink)]"
-              />
-              <span>
-                <span className={`block ${e.available ? "text-ink" : ""}`}>{e.label}</span>
-                <span className="block text-[12px] text-ink-3">{e.note}</span>
-              </span>
-            </label>
-          ))}
-        </div>
-      </fieldset>
+      <EngineChoice engines={engines} selected={request.engine} running={running} onChange={onEngineChange} />
 
-      {outdated && !running && (
-        <p className="mt-6 text-[13px] leading-6 text-ink-2">
-          ※ 前に出した総当たりの結果とは条件が違います。実行すると、この条件の新しい結果になります。
-        </p>
-      )}
-
-      {cancelled && !running && (
-        // 押した「中止する」ボタンは消えるので、フォーカスをこの知らせに移す(lib/flow.ts の sweepCancelled)
-        <p className="mt-6 text-[14px] text-ink-2 outline-none" role="status" tabIndex={-1} data-focus-notice>
-          総当たりを中止しました。条件を変えるか、もう一度実行してください。
-        </p>
-      )}
-
-      {error && (
-        <p role="alert" className="mt-6 rounded-md border border-shu px-4 py-3 text-[14px] text-shu">
-          {error}
-        </p>
-      )}
-
-      {/* 読み上げは区切り(始め・4分の1・半分・4分の3)だけ。数字は見た目の文とバーで伝える。
-          読み上げの領域は実行していないときも置いておく(実行と同時に作ると、最初の区切りが読まれにくいため) */}
-      <p className="sr-only" aria-live="polite">
-        {running ? `総当たりの${milestone}` : ""}
-      </p>
-      {running && (
-        <div className="mt-8 rounded-md border border-rule bg-surface px-4 py-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-[14px] text-ink" aria-hidden="true">
-              {progress && progress.total > 0
-                ? `計算しています(${count.format(progress.done)} / ${count.format(progress.total)}通り)`
-                : "計算を始めています…"}
-            </p>
-            <SecondaryButton onClick={onCancel} disabled={!progress}>
-              中止する
-            </SecondaryButton>
-          </div>
-          {cancelError && (
-            <p role="alert" className="mt-2 text-[13px] text-shu">
-              {cancelError}
-            </p>
-          )}
-          <div
-            role="progressbar"
-            aria-label="総当たりの進み具合"
-            aria-valuemin={0}
-            aria-valuemax={progress?.total || 1}
-            aria-valuenow={progress?.done ?? 0}
-            className="mt-3 h-2 overflow-hidden rounded-full bg-paper"
-          >
-            <div className="h-full rounded-full bg-ink transition-[width] duration-300" style={{ width: `${Math.round(ratio * 100)}%` }} />
-          </div>
-        </div>
-      )}
-
-      <div className="mt-8 flex justify-end border-t border-rule pt-6">
-        <button
-          type="button"
-          onClick={onRun}
-          disabled={running}
-          className="inline-flex items-center gap-3 rounded-md bg-ink py-2.5 pl-3 pr-6 text-[16px] font-bold text-paper hover:opacity-90 disabled:cursor-wait disabled:opacity-60"
-        >
-          <Seal kind="check" size={26} decorative />
-          {running ? "計算しています…" : "総当たりを実行"}
-        </button>
-      </div>
+      <JobStatusAndRun
+        name="総当たり"
+        runLabel="総当たりを実行"
+        running={running}
+        progress={progress}
+        cancelled={cancelled}
+        cancelError={cancelError}
+        error={error}
+        outdated={outdated}
+        onRun={onRun}
+        onCancel={onCancel}
+      />
     </section>
   );
 }

@@ -8,6 +8,7 @@ import {
   canVisit,
   currentRequest,
   currentSweepRequest,
+  currentWalkForwardRequest,
   fieldErrorsFrom,
   flowReducer,
   holdoutOf,
@@ -21,13 +22,15 @@ import {
   showSweepReplacesInput,
   sweepEngineInfo,
   unplacedErrorMessage,
+  walkForwardLimit,
   type FlowState,
   type StepId,
 } from "@/lib/flow.ts";
 import { describeYen, formatDate, formatRatePct, formatYen } from "@/lib/format.ts";
 import { parseParams, toNumber } from "@/lib/form.ts";
 import { pairCount, parseSweepGrid } from "@/lib/sweep.ts";
-import { runSweepJob } from "@/lib/sweepJob.ts";
+import { runSweepJob, runWalkForwardJob } from "@/lib/sweepJob.ts";
+import { monthsText } from "@/lib/walkforward.ts";
 
 import { ResultView } from "./results/ResultView.tsx";
 import { Seal } from "./Seal.tsx";
@@ -36,8 +39,10 @@ import { ConfirmStep } from "./steps/ConfirmStep.tsx";
 import { ParamsStep } from "./steps/ParamsStep.tsx";
 import { StrategyStep } from "./steps/StrategyStep.tsx";
 import { SweepConfirmStep } from "./steps/SweepConfirmStep.tsx";
+import { WalkForwardConfirmStep } from "./steps/WalkForwardConfirmStep.tsx";
 import { SymbolStep } from "./steps/SymbolStep.tsx";
 import { SweepView } from "./sweep/SweepView.tsx";
+import { WalkForwardView } from "./walkforward/WalkForwardView.tsx";
 import { SecondaryButton } from "./ui.tsx";
 
 const count = new Intl.NumberFormat("ja-JP");
@@ -50,10 +55,10 @@ export function BacktestApp() {
   const [state, dispatch] = useReducer(flowReducer, initialFlow);
   // 問い合わせの番号(銘柄の詳細・バックテストの実行・総当たり)。いちばん新しい番号の応答だけを受け取る
   const seq = useRef(0);
-  // いま途中経過を問い合わせている総当たりの番号(画面を閉じたら null にして、問い合わせをやめる)
+  // いま途中経過を問い合わせている総当たり・ウォークフォワードの番号(画面を閉じたら null にして、問い合わせをやめる)
   const polling = useRef<number | null>(null);
   const mainRef = useRef<HTMLElement>(null);
-  // 総当たりの「中止する」が API に届かなかったとき(実行中の表示に出す。次に実行・中止したら消す)
+  // 総当たり・ウォークフォワードの「中止する」が API に届かなかったとき(実行中の表示に出す。次に実行・中止したら消す)
   const [cancelError, setCancelError] = useState<string | null>(null);
 
   const loadCatalog = useCallback(() => {
@@ -174,13 +179,54 @@ export function BacktestApp() {
     }
   }
 
-  function cancelSweep() {
-    const running = state.running;
-    if (running?.kind !== "sweep" || !running.jobId) return;
+  /** ウォークフォワード分析:総当たりと同じジョブの仕組み(docs/walkforward.md 10章)。 */
+  async function runWalkForward() {
+    const request = currentWalkForwardRequest(state);
+    if (!request || state.running) return;
+    seq.current += 1;
+    const id = seq.current;
+    dispatch({ type: "walkStarted", id, request });
     setCancelError(null);
+    polling.current = id;
+    const outcome = await runWalkForwardJob(request, {
+      api,
+      wait,
+      isCurrent: () => polling.current === id,
+      onProgress: (status) => dispatch({ type: "walkProgress", id, jobId: status.id, done: status.done, total: status.total }),
+    });
+    if (polling.current === id) polling.current = null;
+    switch (outcome.kind) {
+      case "done":
+        dispatch({ type: "walkSucceeded", id, result: outcome.status.result!, elapsedMs: outcome.status.elapsed_ms });
+        return;
+      case "cancelled":
+      case "stopped":
+        // stopped:問い合わせをやめた(画面を閉じた・開発中の再読み込み)。ジョブの中止は頼んである
+        dispatch({ type: "walkCancelled", id });
+        return;
+      case "failed":
+        dispatch({ type: "walkFailed", id, message: outcome.message, fieldErrors: {} });
+        return;
+      case "error": {
+        const fieldErrors = fieldErrorsFrom(outcome.error, request);
+        const message =
+          Object.keys(fieldErrors).length > 0
+            ? unplacedErrorMessage(outcome.error, request)
+            : runErrorMessage(outcome.error, request, "ウォークフォワード分析を実行できませんでした");
+        dispatch({ type: "walkFailed", id, message, fieldErrors });
+        return;
+      }
+    }
+  }
+
+  /** 実行中の総当たり・ウォークフォワードの中止を頼む。 */
+  function cancelJob() {
+    const running = state.running;
+    if ((running?.kind !== "sweep" && running?.kind !== "walkforward") || !running.jobId) return;
+    setCancelError(null);
+    const cancel = running.kind === "sweep" ? api.cancelSweep : api.cancelWalkForward;
     // 中止できたことは、問い合わせの続き(status が cancelled)で受け取る。頼めなかったときだけ、ここで知らせる
-    api
-      .cancelSweep(running.jobId)
+    cancel(running.jobId)
       .catch((e: unknown) =>
         setCancelError(
           e instanceof ApiError ? `中止できませんでした:${e.message}` : "中止できませんでした。もう一度押してください",
@@ -208,6 +254,7 @@ export function BacktestApp() {
   const mode = runMode(state);
   const request = currentRequest(state);
   const sweepRequest = currentSweepRequest(state);
+  const walkRequest = currentWalkForwardRequest(state);
   const running = state.running;
   const dataSourceLabel = meta
     ? meta.data_sources.map((s) => s.label).join("、")
@@ -293,6 +340,7 @@ export function BacktestApp() {
               errors={state.fieldErrors}
               notice={state.runError}
               sweepMaxPairs={sweepEngineInfo(state)?.max_pairs ?? null}
+              walkMaxRuns={walkForwardLimit(state)}
               onChange={(form) => dispatch({ type: "editForm", form })}
               onModeChange={(next) => dispatch({ type: "setMode", mode: next })}
               onNext={() => dispatch({ type: "submitParams" })}
@@ -334,12 +382,35 @@ export function BacktestApp() {
                 onEngineChange={(id) => dispatch({ type: "selectSweepEngine", id })}
                 running={running !== null}
                 progress={running?.kind === "sweep" && running.jobId ? { done: running.done, total: running.total } : null}
-                cancelled={state.sweepCancelled}
+                cancelled={state.jobCancelled}
                 cancelError={cancelError}
                 error={state.runError}
                 outdated={resultIsOutdated(state)}
                 onRun={runSweep}
-                onCancel={cancelSweep}
+                onCancel={cancelJob}
+              />
+            ) : (
+              inputError
+            ))}
+          {state.step === 4 &&
+            state.detail &&
+            strategy &&
+            mode === "walkforward" &&
+            (walkRequest || running?.kind === "walkforward" ? (
+              <WalkForwardConfirmStep
+                detail={state.detail}
+                strategy={strategy}
+                request={running?.kind === "walkforward" ? running.request : walkRequest!}
+                engines={meta?.sweep_engines ?? []}
+                onEngineChange={(id) => dispatch({ type: "selectSweepEngine", id })}
+                running={running !== null}
+                progress={running?.kind === "walkforward" && running.jobId ? { done: running.done, total: running.total } : null}
+                cancelled={state.jobCancelled}
+                cancelError={cancelError}
+                error={state.runError}
+                outdated={resultIsOutdated(state)}
+                onRun={runWalkForward}
+                onCancel={cancelJob}
               />
             ) : (
               inputError
@@ -367,6 +438,14 @@ export function BacktestApp() {
               onInspect={onInspect}
             />
           )}
+          {state.step === 5 && mode === "walkforward" && state.lastWalk && (
+            <WalkForwardView
+              key={state.lastWalk.id}
+              record={state.lastWalk}
+              onEditParams={() => goTo(3)}
+              onRestart={() => goTo(1)}
+            />
+          )}
         </main>
       </div>
     </div>
@@ -378,6 +457,7 @@ function ConditionSlip({ state, onJump }: { state: FlowState; onJump: (step: Ste
   const strategy = selectedStrategy(state);
   const form = state.form;
   const sweep = form?.mode === "sweep";
+  const walk = form?.mode === "walkforward";
   const errors = form && strategy ? parseParams(form, strategy.params).errors : {};
   // 項目ごとに、誤りがなければ数値、誤りがあれば null(「入力を確認してください」と出す)
   const value = (key: ParamKey): number | null =>
@@ -387,7 +467,7 @@ function ConditionSlip({ state, onJump }: { state: FlowState; onJump: (step: Ste
   const windows = both(value("short_window"), value("long_window"));
   const costs = both(value("fee_rate_pct"), value("slippage_rate_pct"));
   const cash = value("initial_cash");
-  const grid = form && sweep ? parseSweepGrid(form.sweep, null).grid : null;
+  const grid = form && (sweep || walk) ? parseSweepGrid(form.sweep, null).grid : null;
   const holdout = form && sweep ? holdoutOf(form) : null;
 
   type Row = { step: StepId; label: string; value: string | null; invalid?: boolean };
@@ -399,10 +479,10 @@ function ConditionSlip({ state, onJump }: { state: FlowState; onJump: (step: Ste
       label: "期間",
       value: form ? `${formatDate(form.start_date)}〜\n${formatDate(form.end_date)}` : null,
     },
-    sweep
+    sweep || walk
       ? {
           step: 3,
-          label: "移動平均(総当たり)",
+          label: walk ? "移動平均(区切りごとに選ぶ)" : "移動平均(総当たり)",
           value: grid
             ? `短期${grid.short_min}〜${grid.short_max}日\n長期${grid.long_min}〜${grid.long_max}日\n${count.format(pairCount(grid))}通り`
             : null,
@@ -416,6 +496,15 @@ function ConditionSlip({ state, onJump }: { state: FlowState; onJump: (step: Ste
         },
     ...(sweep
       ? [{ step: 3 as StepId, label: "検証期間", value: holdout ? `${formatDate(holdout)}〜` : "使わない" }]
+      : []),
+    ...(walk && form
+      ? [
+          {
+            step: 3 as StepId,
+            label: "ウォークフォワード",
+            value: `直前${monthsText(form.walk.in_sample_months)}で選び\n次の${monthsText(form.walk.out_of_sample_months)}使う`,
+          },
+        ]
       : []),
     {
       step: 3,

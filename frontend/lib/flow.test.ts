@@ -7,6 +7,7 @@ import {
   canVisit,
   currentRequest,
   currentSweepRequest,
+  currentWalkForwardRequest,
   fieldErrorsFrom,
   flowReducer,
   initialFlow,
@@ -21,7 +22,7 @@ import {
   type FlowState,
 } from "./flow.ts";
 import type { SweepForm } from "./sweep.ts";
-import { detail, META, result, STRATEGIES, sweepResult, symbol } from "./testing.ts";
+import { detail, META, result, STRATEGIES, sweepResult, symbol, walkForwardResult } from "./testing.ts";
 
 function run(actions: FlowAction[], start: FlowState = initialFlow): FlowState {
   return actions.reduce(flowReducer, start);
@@ -666,12 +667,12 @@ test("総当たりを中止すると、確認の画面のまま知らせを出�
   const cancelled = flowReducer(running, { type: "sweepCancelled", id: 13 });
   assert.equal(cancelled.running, null);
   assert.equal(cancelled.step, 4);
-  assert.equal(cancelled.sweepCancelled, true);
+  assert.equal(cancelled.jobCancelled, true);
   assert.equal(cancelled.runError, null);
   // 押した「中止する」は消えるので、知らせにフォーカスを移す
   assert.equal(cancelled.focus.target, "notice");
   assert.ok(cancelled.focus.seq > running.focus.seq);
-  assert.equal(editSweep(cancelled, { short_step: "3" }).sweepCancelled, false);
+  assert.equal(editSweep(cancelled, { short_step: "3" }).jobCancelled, false);
 });
 
 test("総当たりの実行中は、切り替え・詳しく見る・エンジンの変更を受け付けない", () => {
@@ -721,4 +722,136 @@ test("総当たりの API のエラーの振り分け:格子・検証期間・�
 test("総当たりのエンジンが使えないものなら、一覧を受け取ったときに使えるものにする", () => {
   const s = flowReducer({ ...initialFlow, sweepEngine: "cuda" }, loaded);
   assert.equal(s.sweepEngine, "python");
+});
+
+// --- ウォークフォワード分析(docs/walkforward.md) ------------------------------------------
+
+/** ウォークフォワードに切り替えた状態。テストの銘柄は約2年分なので、選ぶ期間を1年にして区切りを作れるようにする */
+function walkMode(state: FlowState = atParams(), walk: Partial<NonNullable<FlowState["form"]>["walk"]> = { in_sample_months: 12 }): FlowState {
+  const switched = flowReducer(state, { type: "setMode", mode: "walkforward" });
+  return editWalk(switched, walk);
+}
+
+function editWalk(state: FlowState, changes: Partial<NonNullable<FlowState["form"]>["walk"]>): FlowState {
+  const form = state.form!;
+  return flowReducer(state, { type: "editForm", form: { ...form, walk: { ...form.walk, ...changes } } });
+}
+
+function walkStarted(state: FlowState, id: number): FlowState {
+  const request = currentWalkForwardRequest(state);
+  assert.ok(request, "ウォークフォワードを実行できる条件のはず");
+  return flowReducer(state, { type: "walkStarted", id, request });
+}
+
+test("ウォークフォワードに切り替えると、総当たりと同じ格子・費用に、基準・選ぶ期間・使う期間を加えたリクエストになる", () => {
+  const s = walkMode();
+  assert.equal(currentRequest(s), null);
+  assert.equal(currentSweepRequest(s), null);
+  assert.deepEqual(currentWalkForwardRequest(s), {
+    symbol_id: "DEMO:1001",
+    strategy_id: "ma_cross",
+    engine: "python",
+    start_date: "2024-01-04",
+    end_date: "2025-12-30",
+    grid: { short_min: 3, short_max: 30, short_step: 3, long_min: 20, long_max: 120, long_step: 10 },
+    params: { fee_rate_pct: 0.1, slippage_rate_pct: 0.05, initial_cash: 1_000_000 },
+    objective: "sharpe_ratio",
+    in_sample_months: 12,
+    out_of_sample_months: 6,
+  });
+});
+
+test("区切りが作れないと確認へ進まず、期間か長さを変えると誤りが消える", () => {
+  // 既定の2年 + 半年は、約2年のデータには入らない
+  const s = flowReducer(walkMode(atParams(), { in_sample_months: 24 }), { type: "submitParams" });
+  assert.equal(s.step, 3);
+  assert.match(s.fieldErrors.windows ?? "", /^期間が短すぎて、選ぶ期間\(24か月\)と使う期間\(6か月\)を1回も取れません/);
+  assert.equal(s.focus.target, "error");
+  const fixed = editWalk(s, { in_sample_months: 12 });
+  assert.equal(fixed.fieldErrors.windows, undefined);
+  assert.equal(flowReducer(fixed, { type: "submitParams" }).step, 4);
+});
+
+test("計算の量の上限は、組み合わせの数 × 区切りの数(エンジンの組み合わせの上限の2倍)", () => {
+  // 1〜40 × 41〜120 = 3,200通り(総当たりなら上限2,000を超える)× 区切り1回 = 3,200回 ≦ 4,000回
+  const wide = { short_min: "1", short_max: "40", short_step: "1", long_min: "41", long_max: "120", long_step: "1" };
+  const one = editSweep(walkMode(), wide);
+  assert.ok(currentWalkForwardRequest(one));
+  // 使う期間を3か月にすると区切りが3回(9,600回)になり、上限を超える
+  const three = flowReducer(editWalk(one, { out_of_sample_months: 3 }), { type: "submitParams" });
+  assert.match(three.fieldErrors.grid ?? "", /^計算が多すぎます\(3,200通り × 区切り3回 = 9,600回\)。このエンジンでは4,000回までです。/);
+  // 使う期間を戻すと(格子は変えていなくても)誤りは消える
+  assert.equal(editWalk(three, { out_of_sample_months: 6 }).fieldErrors.grid, undefined);
+});
+
+test("ウォークフォワードの実行:途中経過 → 結果の画面。結果は1組・総当たりとは別に覚える", () => {
+  const sweepDone = atSweepResult();
+  const confirm = flowReducer(walkMode(flowReducer(sweepDone, { type: "goTo", step: 3 })), { type: "submitParams" });
+  assert.equal(confirm.step, 4);
+  const running = walkStarted(confirm, 21);
+  assert.equal(running.running?.kind, "walkforward");
+  const progress = flowReducer(running, { type: "walkProgress", id: 21, jobId: "job-w", done: 30, total: 105 });
+  assert.deepEqual(
+    progress.running && progress.running.kind === "walkforward" && [progress.running.jobId, progress.running.done],
+    ["job-w", 30],
+  );
+  // 総当たりの応答・番号の違う応答は捨てる
+  assert.equal(flowReducer(progress, { type: "sweepProgress", id: 21, jobId: "x", done: 1, total: 1 }), progress);
+  assert.equal(flowReducer(progress, { type: "walkProgress", id: 99, jobId: "x", done: 1, total: 1 }), progress);
+  const done = flowReducer(progress, { type: "walkSucceeded", id: 21, result: walkForwardResult("DEMO:1001"), elapsedMs: 5200 });
+  assert.equal(done.step, 5);
+  assert.equal(done.lastWalk?.elapsedMs, 5200);
+  assert.equal(done.lastSweep?.id, 11);
+  assert.ok(canVisit(done, 5));
+  // 条件を変えたら前の結果には戻れない。総当たりに切り替えれば、総当たりの結果に戻れる
+  const changed = editWalk(done, { objective: "total_return" });
+  assert.equal(canVisit(changed, 5), false);
+  assert.ok(resultIsOutdated(changed));
+  assert.ok(canVisit(flowReducer(changed, { type: "setMode", mode: "sweep" }), 5));
+});
+
+test("ウォークフォワードの中止・失敗・実行中の操作", () => {
+  const confirm = flowReducer(walkMode(), { type: "submitParams" });
+  const running = walkStarted(confirm, 22);
+  for (const action of [
+    { type: "setMode", mode: "sweep" },
+    { type: "goTo", step: 3 },
+    { type: "selectSweepEngine", id: "cuda" },
+  ] as FlowAction[]) {
+    assert.equal(flowReducer(running, action), running, action.type);
+  }
+  const cancelled = flowReducer(running, { type: "walkCancelled", id: 22 });
+  assert.equal(cancelled.running, null);
+  assert.equal(cancelled.jobCancelled, true);
+  assert.equal(cancelled.focus.target, "notice");
+  // 総当たりの中止の応答では止まらない
+  assert.equal(flowReducer(running, { type: "sweepCancelled", id: 22 }), running);
+  // 営業日が要る誤り(API だけが確かめる)は、選ぶ期間の長さの欄に出す
+  const failed = flowReducer(running, {
+    type: "walkFailed",
+    id: 22,
+    message: null,
+    fieldErrors: { in_sample_months: "長期の日数(最長120日)のウォームアップに使う日を除くと、区切り1の選ぶ期間の営業日が3日未満になります。" },
+  });
+  assert.equal(failed.step, 3);
+  assert.match(failed.fieldErrors.in_sample_months ?? "", /区切り1の選ぶ期間/);
+  // 長期の日数を変えたら、もう当てはまるか分からないので消す
+  assert.equal(editSweep(failed, { long_max: "60" }).fieldErrors.in_sample_months, undefined);
+});
+
+test("ウォークフォワードの API のエラーの振り分け:設定・区切り・格子・費用は欄に、エンジンなどは文に", () => {
+  const request = currentWalkForwardRequest(walkMode())!;
+  const error = new ApiError(422, "入力内容を確認してください", [
+    { field: "objective", message: "1位を選ぶ基準は、シャープレシオか総リターンを選んでください" },
+    { field: "windows", message: "期間が短すぎて…" },
+    { field: "out_of_sample_months", message: "区切り2の使う期間の営業日が3日未満です。使う期間を長くしてください" },
+    { field: "grid", message: "計算が多すぎます" },
+    { field: "holdout_start_date", message: "ウォークフォワードには検証期間の欄がない" },
+    { field: "engine", message: "このエンジンは使えません" },
+  ]);
+  assert.deepEqual(Object.keys(fieldErrorsFrom(error, request)).sort(), ["grid", "objective", "out_of_sample_months", "windows"]);
+  assert.equal(
+    unplacedErrorMessage(error, request),
+    "入力内容を確認してください(ウォークフォワードには検証期間の欄がない・このエンジンは使えません)",
+  );
 });
