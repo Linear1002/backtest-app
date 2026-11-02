@@ -136,7 +136,7 @@ def test_settings_errors(demo1003, settings: WalkForwardSettings, message: str) 
 
 
 def test_check_order(demo1003) -> None:
-    """7章:格子 → 費用 → 設定 → 期間 → 区切りがない → 日付の順番 → 営業日 → データの異常。"""
+    """7章:格子 → 費用 → 設定 → 期間 → 日付の順番 → 区切り(ない・営業日)→ 計算の量 → データの異常。"""
     start, end = demo1003[0].date, demo1003[-1].date
     bad_grid = SweepGrid(10, 5, 1, 20, 30, 10)
     bad_costs = dataclasses.replace(COSTS, fee_rate=0.2)
@@ -152,10 +152,44 @@ def test_check_order(demo1003) -> None:
     swapped = list(demo1003)
     swapped[10], swapped[11] = swapped[11], swapped[10]
     short_end = add_months(start, 17)  # 12か月 + 6か月に1日足りない
-    with pytest.raises(EngineInputError, match="1回も取れません"):
+    # 日付の順番(5)は、区切りがない(6)より先
+    with pytest.raises(EngineDataError, match="古い順に並んでいません"):
         validate_walkforward(swapped, start, short_end, GRID, COSTS, SETTINGS)
-    with pytest.raises(EngineDataError):
-        validate_walkforward(swapped, start, end, GRID, COSTS, SETTINGS)
+    with pytest.raises(EngineInputError, match="1回も取れません"):
+        validate_walkforward(demo1003, start, short_end, GRID, COSTS, SETTINGS)
+
+    # 計算の量(7)は、区切りの営業日(6)のあと、データの異常(8)の前。区切りの数が決まってから呼ぶ
+    calls: list[tuple[int, int]] = []
+
+    class TooMany(Exception):
+        pass
+
+    def too_many(n_pairs: int, n_windows: int) -> None:
+        calls.append((n_pairs, n_windows))
+        raise TooMany
+
+    with pytest.raises(EngineInputError, match="選ぶ期間の営業日が3日未満"):
+        validate_walkforward(
+            demo1003,
+            start,
+            end,
+            SweepGrid(3, 12, 3, 15, 400, 10),
+            COSTS,
+            WalkForwardSettings("sharpe_ratio", 1, 1),
+            check_runs=too_many,
+        )
+    assert calls == []
+    windows = validate_walkforward(demo1003, start, end, GRID, COSTS, SETTINGS)[1]
+    # 最後の使う期間の中の日に、データの異常を入れる(最後の区切りのあとの使わない日は、確かめる範囲の外)
+    last_end = windows[-1].out_of_sample.end
+    target = max(i for i, b in enumerate(demo1003) if b.date <= last_end)
+    broken = list(demo1003)
+    broken[target] = dataclasses.replace(broken[target], adj_factor=None)
+    with pytest.raises(TooMany):
+        validate_walkforward(broken, start, end, GRID, COSTS, SETTINGS, check_runs=too_many)
+    assert calls == [(16, len(windows))]
+    with pytest.raises(EngineDataError, match="調整係数が Null"):
+        validate_walkforward(broken, start, end, GRID, COSTS, SETTINGS, check_runs=lambda *_: None)
 
 
 def test_data_anomaly_only_in_the_last_out_of_sample_is_found_before_computing(demo1003) -> None:
@@ -318,7 +352,9 @@ def test_counts_of_changes_and_beats(demo1003) -> None:
     )
     for w in result.windows:
         out = w.window.out_of_sample
-        alone = run_buy_and_hold(demo1003, out.start, out.end, COSTS.params_for(3, 15))
+        # 区切りの買い持ちは、戦略と同じ元手(その区切りの初期資金)で買う
+        params = dataclasses.replace(COSTS.params_for(3, 15), initial_cash=w.starting_cash)
+        alone = run_buy_and_hold(demo1003, out.start, out.end, params)
         assert w.benchmark_total_return == alone.metrics.total_return
 
 

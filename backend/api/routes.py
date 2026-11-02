@@ -55,7 +55,6 @@ from engine.reference.walkforward import (
     WalkForwardSettings,
     WindowError,
     assemble_walkforward,
-    calendar_windows,
     validate_walkforward,
 )
 
@@ -418,17 +417,21 @@ def start_walkforward(
     service.require_listed(sid)
     data = service.load(sid)
     period = validate_period(body.start_date, body.end_date, data.available, data.bars)  # 4
-    windows_plan = calendar_windows(
-        period.start, period.end, settings.in_sample_months, settings.out_of_sample_months
-    )
-    pairs_count = len(grid.pairs())
-    if windows_plan:  # 6:計算の量(区切りがないときは、下の validate_walkforward が 5 の誤りにする)
-        check_walkforward_runs(
-            pairs_count, len(windows_plan), walkforward_max_runs(engine.max_pairs)
-        )
     bars = convert.to_engine_bars(data.bars)
+    max_runs = walkforward_max_runs(engine.max_pairs)
     try:
-        pairs, windows = validate_walkforward(bars, period.start, period.end, grid, costs, settings)
+        # 5〜8(7 の計算の量は、区切りの数が決まってから。docs/walkforward.md 7章)
+        pairs, windows = validate_walkforward(
+            bars,
+            period.start,
+            period.end,
+            grid,
+            costs,
+            settings,
+            check_runs=lambda n_pairs, n_windows: check_walkforward_runs(
+                n_pairs, n_windows, max_runs
+            ),
+        )
     except WindowError as error:
         raise InputValidationError([ErrorItem(field=error.field, message=str(error))]) from error
 

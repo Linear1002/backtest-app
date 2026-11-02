@@ -7,11 +7,11 @@
 import { useId } from "react";
 
 import type { Objective, WalkForwardResult, WalkForwardWindow } from "@/lib/api.ts";
-import { benchmarkUnavailable, returnGap, versusBenchmark, versusText } from "@/lib/benchmark.ts";
+import { benchmarkUnavailable, returnGap, versusText } from "@/lib/benchmark.ts";
 import type { WalkForwardRecord } from "@/lib/flow.ts";
 import { direction, formatDate, formatDateTimeJst, formatNumber, formatPercent, formatRatePct, formatYen } from "@/lib/format.ts";
 import { OBJECTIVE_LABELS } from "@/lib/sweep.ts";
-import { monthsText } from "@/lib/walkforward.ts";
+import { monthsText, windowVersus } from "@/lib/walkforward.ts";
 
 import { formatObjective } from "../sweep/Heatmap.tsx";
 import { ScrollRegion, SecondaryButton } from "../ui.tsx";
@@ -125,7 +125,8 @@ function Summary({ result }: { result: WalkForwardResult }) {
       </h3>
       <p className="mt-1 text-[13px] leading-6 text-ink-2">
         使う期間だけをつないだ成績です。どの日も、その日より前のデータだけで選んだ日数で売買しているので、
-        「この選び方を実際に続けていたら」に近い成績になります(費用・約定の前提はそのまま)。
+        選び方そのものの成績を表します。ただし、区切りごとに株を持たない状態から始め、次のゴールデンクロスまで買わないので、
+        実際にこの選び方を続けた場合とは同じになりません(下の注意を参照)。
       </p>
       <dl className="mt-3 grid border-t border-rule sm:grid-cols-2">
         <Row label="つないだ総リターン" help="入力の初期資金から、最後の日(清算する前)まで">
@@ -227,18 +228,14 @@ function sameChoice(a: WalkForwardWindow | undefined, b: WalkForwardWindow): boo
   return a.chosen?.short_window === b.chosen?.short_window && a.chosen?.long_window === b.chosen?.long_window;
 }
 
-/** 使う期間の総リターンを、その使う期間だけの買い持ちと比べた言い方。比べられないときは「−」。 */
-function windowVersus(w: WalkForwardWindow): { text: string; tone: string } {
-  if (w.benchmark_total_return === null) return { text: "−", tone: "text-ink-3" };
-  // 画面に出す桁で同じなら「同じ」(lib/benchmark.ts)
-  switch (versusBenchmark(w.out_of_sample_metrics.total_return, w.benchmark_total_return, "total_return")) {
-    case "良い":
-      return { text: "上回った", tone: "text-ink" };
-    case "同じ":
-      return { text: "同じ", tone: "text-ink-2" };
-    default:
-      return { text: "下回った", tone: "text-ink-2" };
-  }
+/**
+ * 使う期間の総リターンを、その使う期間だけの買い持ちと比べた言い方。
+ * まとめの「上回った区切り」(API の beats_benchmark)と同じく、丸めずに比べる(lib/walkforward.ts の windowVersus)。
+ */
+function windowVersusLabel(w: WalkForwardWindow): { text: string; tone: string } {
+  const verdict = windowVersus(w.out_of_sample_metrics.total_return, w.benchmark_total_return);
+  if (verdict === "上回った") return { text: verdict, tone: "text-ink" };
+  return { text: verdict ?? "−", tone: "text-ink-2" };
 }
 
 function WindowTable({ result }: { result: WalkForwardResult }) {
@@ -291,7 +288,7 @@ function WindowTable({ result }: { result: WalkForwardResult }) {
           <tbody className="divide-y divide-rule">
             {result.windows.map((w, i) => {
               const changed = i > 0 && !sameChoice(result.windows[i - 1], w);
-              const versus = windowVersus(w);
+              const versus = windowVersusLabel(w);
               const ret = w.out_of_sample_metrics.total_return;
               return (
                 <tr key={w.index}>

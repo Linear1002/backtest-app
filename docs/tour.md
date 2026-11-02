@@ -210,7 +210,7 @@ flowchart LR
 | ファイル | 役割 | 読むときのポイント |
 |---|---|---|
 | `engine/reference/walkforward.py` | **ウォークフォワードの正解**。月の足し方(`add_months`)、暦だけで決まる区切り(`calendar_windows`)、選ぶ期間の始まりをそろえて営業日を確かめる(`make_windows`)、1位の選び方(`choose`)、区切りでの清算(`liquidated`)、使う期間の計算(`run_window`)、つなぎ方(`assemble_walkforward`)、全部を順番に(`run_walkforward`) | 区切りはいつも開始日から月を足して決める(前の区切りから足し重ねると、1/31 → 2/28 → 3/28 と月末がずれていく。ウォークフォワード 3章)。選ぶときに使うのは**その区切りの選ぶ期間の値だけ**。同率1位は組み合わせの順番で最初のもの、全部算出不可なら選ばず現金のまま(4章) |
-| `backend/api/routes.py` の `start_walkforward` | 入力チェック(格子・費用・設定 → 期間 → 区切り → 計算の量 → データの異常)→ 総当たりと同じジョブを始める | 選ぶ期間の計算(重い)はプロセスで並列、選んで・使う期間を計算して・つなぐ(軽い)のはジョブのスレッドで(`build`) |
+| `backend/api/routes.py` の `start_walkforward` | 入力チェック(格子・費用・設定 → 期間 → 日付の順番 → 区切り → 計算の量 → データの異常。計算の量は `validate_walkforward` に `check_runs` として渡す)→ 総当たりと同じジョブを始める | 選ぶ期間の計算(重い)はプロセスで並列、選んで・使う期間を計算して・つなぐ(軽い)のはジョブのスレッドで(`build`) |
 | `backend/api/validation.py` の `walkforward_settings_errors`・`check_walkforward_runs` | 基準・長さ・計算の量の入力チェック。画面の `lib/walkforward.ts` と同じ文(`tests/fixtures/walkforward_messages.json`) | 計算の量の上限は「組み合わせの数 × 区切りの数」で、総当たりの組み合わせの上限の2倍(9章) |
 | `backend/api/walkforward_convert.py` | 結果 → JSON。注記(つなぎ方・試した数・清算・使わなかった日・同率・選ばなかった区切り) | |
 | `frontend/lib/walkforward.ts` | 区切りの計算(Python と同じ。`tests/fixtures/walkforward_windows.json` を両方のテストが読む)と入力チェック | 区切りは暦だけで決まるので、株価がなくても画面がその場で見通しを出せる(3章) |

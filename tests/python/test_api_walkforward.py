@@ -161,6 +161,24 @@ def test_too_many_runs(client: TestClient) -> None:
     )
 
 
+def test_business_day_errors_come_before_too_many_runs(client: TestClient) -> None:
+    """7章:区切りの営業日(6)は、計算の量(7)より先に確かめる。"""
+    grid = {
+        "short_min": 1,
+        "short_max": 20,
+        "short_step": 1,
+        "long_min": 21,
+        "long_max": 120,
+        "long_step": 1,
+    }
+    response = client.post(
+        "/api/walkforwards", json=body(grid=grid, in_sample_months=1, out_of_sample_months=1)
+    )
+    errors = errors_of(response)
+    assert list(errors) == ["in_sample_months"]
+    assert "最長120日" in errors["in_sample_months"]
+
+
 def test_alignment_error_goes_to_the_in_sample_field(client: TestClient) -> None:
     # データの初日から、選ぶ期間1か月:長期45日のウォームアップを除くと、区切り1の選ぶ期間が残らない
     response = client.post(

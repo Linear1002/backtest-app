@@ -5,7 +5,7 @@ import { useId } from "react";
 import type { Strategy, SweepEngineInfo, SymbolDetail, WalkForwardRequest } from "@/lib/api.ts";
 import { describeYen, formatDate, formatRatePct, formatYen } from "@/lib/format.ts";
 import { longestWindow, OBJECTIVE_LABELS, pairCount } from "@/lib/sweep.ts";
-import { calendarWindows, monthsText } from "@/lib/walkforward.ts";
+import { calendarWindows, monthsText, runCounts } from "@/lib/walkforward.ts";
 
 import { StepHeading } from "../ui.tsx";
 import { EngineChoice, JobStatusAndRun } from "./JobParts.tsx";
@@ -18,7 +18,7 @@ function assumptions(request: WalkForwardRequest, longest: number): string[] {
   return [
     `区切りごとに、直前の${monthsText(request.in_sample_months)}(選ぶ期間)だけで組み合わせをすべて試し、${objective}が1位の日数を選びます。同率1位なら、短期の短い順 → 長期の短い順で最初のものにします。`,
     `選んだ日数で、次の${monthsText(request.out_of_sample_months)}(使う期間)だけ売買します。どの日も、その日より前のデータだけで選んだ日数で売買することになります。`,
-    "使う期間の最後に株を持っていたら、その日の評価価格で売ったものとして(売りの手数料・スリッページを引いて)次の区切りに進みます。実際より費用を少し多めに引きます。",
+    "使う期間の最後に株を持っていたら、その日の評価価格で売ったものとして(売りの手数料・スリッページを引いて)次の区切りに進みます。次の区切りは株を持たない状態から始め、次にゴールデンクロスが起きるまで買いません(実際に持ち続けた場合とは、良くも悪くも違います)。",
     `どの区切りでも、すべての組み合わせを同じ日から比べます。開始日より前のデータが長期の日数(最長${longest}日)に足りない区切りは、選ぶ期間の始まりを、そのウォームアップがそろう日まで遅らせます。`,
     "選ぶ期間の計算は、どの区切りも入力の初期資金から始めます(その時点の資産ではありません)。",
     "当日の終値でシグナルを判定し、次に売買が成立した日の始値で約定します。配当・税金・ストップ高やストップ安は考えません。",
@@ -62,6 +62,7 @@ export function WalkForwardConfirmStep({
   const windows = calendarWindows(request.start_date, request.end_date, request.in_sample_months, request.out_of_sample_months);
   const first = windows[0];
   const last = windows[windows.length - 1];
+  const runs = runCounts(pairs, windows.length);
   const rows: [string, string][] = [
     ["銘柄", `${detail.symbol.name}(${request.symbol_id})`],
     ["売買ルール", `${strategy.name}(日数をウォークフォワードで選ぶ)`],
@@ -75,9 +76,10 @@ export function WalkForwardConfirmStep({
       : []),
     ["短期の日数", `${g.short_min}〜${g.short_max}日(${g.short_step}日ごと)`],
     ["長期の日数", `${g.long_min}〜${g.long_max}日(${g.long_step}日ごと)`],
+    ["組み合わせ", `${count.format(pairs)}通り`],
     [
-      "組み合わせ",
-      `${count.format(pairs)}通り(計算は ${count.format(pairs)}通り × 区切り${count.format(windows.length)}回 + 使う期間${count.format(windows.length)}回 = ${count.format(pairs * windows.length + windows.length)}回)`,
+      "計算",
+      `選ぶ期間 ${count.format(pairs)}通り × 区切り${count.format(windows.length)}回 = ${count.format(runs.inSample)}回 + 使う期間 ${count.format(runs.outOfSample)}回 = ${count.format(runs.total)}回`,
     ],
     ["手数料率", formatRatePct(request.params.fee_rate_pct)],
     ["スリッページ率", formatRatePct(request.params.slippage_rate_pct)],

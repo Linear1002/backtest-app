@@ -270,7 +270,7 @@ test("ウォークフォワード分析:区切りの見通し → 確認 → つ
   await page.getByRole("radio", { name: /ウォークフォワードで確かめる/ }).check();
   // 区切りは暦だけで決まるので、入力のたびにその場で出る
   await expect(page.getByText("区切り5回", { exact: true })).toBeVisible();
-  await expect(page.getByText("計算 105通り × 区切り5回 = 525回(このエンジンでは4,000回まで)")).toBeVisible();
+  await expect(page.getByText(/選ぶ期間の計算 105通り × 区切り5回 = 525回\(このエンジンでは4,000回まで\)・ほかに使う期間の計算 5回/)).toBeVisible();
 
   // 選ぶ期間を5年にすると、約4年半のデータでは区切りが作れない。確認へ進むと、その文にフォーカスが移る
   await page.getByRole("group", { name: /選ぶ期間/ }).getByRole("button", { name: "5年" }).click();
@@ -285,7 +285,7 @@ test("ウォークフォワード分析:区切りの見通し → 確認 → つ
   await page.getByRole("button", { name: "確認へ進む", exact: true }).click();
   await expect(page.getByRole("heading", { name: /確認してウォークフォワード分析を実行する/ })).toBeVisible();
   await expect(page.getByRole("row", { name: /区切り/ }).first()).toContainText("5回");
-  await expect(page.getByRole("row", { name: /組み合わせ/ })).toContainText("= 530回");
+  await expect(page.getByRole("row", { name: /^計算/ })).toContainText("= 525回 + 使う期間 5回 = 530回");
   await expectNoA11yViolations(page, "手順4(ウォークフォワードの確認)");
   await page.getByRole("button", { name: /ウォークフォワード分析を実行/ }).click();
   await expect(page.getByRole("heading", { name: "まとめ" })).toBeVisible({ timeout: 120_000 });

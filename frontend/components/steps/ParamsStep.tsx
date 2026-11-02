@@ -486,8 +486,9 @@ function WindowPreview({
       </p>
       {runs !== null && (
         <p className="text-[13px] leading-6 text-ink-2 tabular">
-          計算 {count.format(pairs!)}通り × 区切り{count.format(windows.length)}回 = {count.format(runs)}回
-          {maxRuns !== null && `(このエンジンでは${count.format(maxRuns)}回まで)`}
+          選ぶ期間の計算 {count.format(pairs!)}通り × 区切り{count.format(windows.length)}回 = {count.format(runs)}回
+          {maxRuns !== null && `(このエンジンでは${count.format(maxRuns)}回まで)`}・ほかに使う期間の計算{" "}
+          {count.format(windows.length)}回
         </p>
       )}
       {last.outOfSampleEnd < end && (

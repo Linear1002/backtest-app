@@ -8,9 +8,11 @@ import {
   DEFAULT_WALKFORWARD_FORM,
   maxRuns,
   monthsText,
+  runCounts,
   settingsErrors,
   validateWalkForward,
   type WalkForwardForm,
+  windowVersus,
 } from "./walkforward.ts";
 
 type WindowCase = {
@@ -100,4 +102,16 @@ test("長さの読み方:12の倍数は年で書く", () => {
   assert.equal(monthsText(24), "2年");
   assert.equal(monthsText(6), "6か月");
   assert.equal(monthsText(18), "18か月");
+});
+
+test("区切りの買い持ちとの比較は丸めずに比べる(API の beats_benchmark と同じ)", () => {
+  // どちらも表示は +1.23% だが、上回っている
+  assert.equal(windowVersus(0.012341, 0.012339), "上回った");
+  assert.equal(windowVersus(0.012339, 0.012341), "下回った");
+  assert.equal(windowVersus(0.05, 0.05), "同じ");
+  assert.equal(windowVersus(0.05, null), null);
+});
+
+test("計算の回数:上限と比べるのは選ぶ期間の計算だけ。使う期間の計算は区切りの数だけ足す", () => {
+  assert.deepEqual(runCounts(105, 5), { inSample: 525, outOfSample: 5, total: 530 });
 });

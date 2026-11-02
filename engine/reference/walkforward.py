@@ -15,7 +15,7 @@ import calendar
 import dataclasses
 import datetime as dt
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from engine.reference.backtest import (
@@ -245,19 +245,25 @@ def validate_walkforward(
     grid: SweepGrid,
     costs: SweepCosts,
     settings: WalkForwardSettings,
+    check_runs: Callable[[int, int], None] | None = None,
 ) -> tuple[list[tuple[int, int]], tuple[Window, ...]]:
-    """7章の1〜5・7〜9(6 の計算の量は API が確かめる)。誤りがなければ (組み合わせ, 区切り) を返す。"""
+    """7章の1〜8。誤りがなければ (組み合わせ, 区切り) を返す。
+
+    7 の計算の量の上限はエンジンごとに違うので、check_runs(組み合わせの数, 区切りの数)で呼んだ側が確かめる(誤りなら例外)。
+    """
     pairs = validate_grid(grid)  # 1
     validate_params(costs.params_for(*pairs[0]))  # 2
     validate_settings(settings)  # 3
     if start > end:  # 4
         raise EngineInputError("開始日は終了日より前の日付にしてください")
+    validate_order(bars)  # 5
     if not calendar_windows(start, end, settings.in_sample_months, settings.out_of_sample_months):
-        raise no_windows_error(settings)  # 5
-    validate_order(bars)  # 7
+        raise no_windows_error(settings)  # 6:区切りが1つも作れない
     longest = max(long for _, long in pairs)
-    windows = make_windows(bars, start, end, longest, settings)  # 8
-    # 9:すべての区切り・組み合わせ・買い持ちの読み込む範囲を合わせた範囲
+    windows = make_windows(bars, start, end, longest, settings)  # 6:そろえたあとの営業日
+    if check_runs is not None:
+        check_runs(len(pairs), len(windows))  # 7
+    # 8:すべての区切り・組み合わせ・買い持ちの読み込む範囲を合わせた範囲
     validate_records(
         select_load_range(bars, windows[0].in_sample.start, windows[-1].out_of_sample.end, longest)
     )
@@ -350,7 +356,8 @@ def run_window(
         final = last.equity
         after = liquidated(last.cash, last.shares, last.valuation_price, params)
         holding = last.shares > 0
-    benchmark = run_buy_and_hold(bars, out.start, out.end, costs.params_for(*pair))
+    # 比べる買い持ちも、戦略と同じ元手(この区切りの初期資金)で買う。買えるかどうか・売買単位の切り捨てを戦略とそろえる
+    benchmark = run_buy_and_hold(bars, out.start, out.end, params)
     return (
         WindowResult(
             window=window,

@@ -166,6 +166,21 @@ export function validateWalkForward(
   return { windows, errors: tooMany ? { grid: tooMany } : {} };
 }
 
+/**
+ * 区切りの使う期間の総リターンを、その使う期間だけの買い持ちと比べる。買い持ちを買えなかったら null(比べない)。
+ * API の beats_benchmark(engine/reference/walkforward.py)と同じく丸めずに比べるので、表示が同じ +1.23% でも「上回った」になることがある。
+ */
+export function windowVersus(strategyReturn: number, benchmarkReturn: number | null): "上回った" | "下回った" | "同じ" | null {
+  if (benchmarkReturn === null) return null;
+  if (strategyReturn > benchmarkReturn) return "上回った";
+  return strategyReturn < benchmarkReturn ? "下回った" : "同じ";
+}
+
+/** 計算の回数の内訳。上限と比べるのは選ぶ期間の計算(組み合わせの数 × 区切りの数)だけ */
+export function runCounts(pairs: number, windows: number): { inSample: number; outOfSample: number; total: number } {
+  return { inSample: pairs * windows, outOfSample: windows, total: pairs * windows + windows };
+}
+
 /** 選ぶ期間・使う期間の長さの読み方(「2年」「6か月」。12の倍数は年で書く)。 */
 export function monthsText(months: number): string {
   return months % 12 === 0 ? `${months / 12}年` : `${months}か月`;
