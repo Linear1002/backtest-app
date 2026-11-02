@@ -12,6 +12,7 @@ import type {
   SweepResult,
   SymbolDetail,
   SymbolSummary,
+  WalkForwardResult,
 } from "./api.ts";
 
 /** リポジトリの tests/fixtures/ にある JSON(API のテストと共有している)を読む。 */
@@ -174,5 +175,95 @@ export function sweepResult(symbolId: string): SweepResult {
     ],
     notes: [{ kind: "trials", message: "4通りの組み合わせを試した結果です" }],
     data_info: { source_id: "demo", source_label: "架空データ", license_note: "", fetched_at: null, warning: null },
+  };
+}
+
+/**
+ * ウォークフォワード分析の小さな結果(選ぶ期間12か月・使う期間3か月の区切り2回)。
+ * 区切り1は (6,20) を選んで買い持ちを上回り、区切り2は同率2通りの最初 (3,20) を選んで下回った。
+ */
+export function walkForwardResult(symbolId: string): WalkForwardResult {
+  const period = (start: string, end: string, days: number) => ({
+    start_date: start,
+    end_date: end,
+    first_business_day: start,
+    last_business_day: end,
+    business_days: days,
+  });
+  const base = sweepResult(symbolId);
+  return {
+    symbol: base.symbol,
+    strategy_id: "ma_cross",
+    engine: base.engine,
+    grid: base.grid,
+    params: base.params,
+    objective: "sharpe_ratio",
+    in_sample_months: 12,
+    out_of_sample_months: 3,
+    count: 4,
+    runs: 10,
+    windows: [
+      {
+        index: 1,
+        requested_in_sample_start: "2024-01-04",
+        in_sample: period("2024-02-01", "2025-01-03", 230),
+        out_of_sample: period("2025-01-06", "2025-04-03", 60),
+        chosen: { short_window: 6, long_window: 20 },
+        in_sample_value: 1.1,
+        tie_count: 1,
+        starting_cash: 1_000_000,
+        out_of_sample_metrics: sweepMetrics(0.9, 0.05, 0.04),
+        ended_with_shares: true,
+        final_equity: 1_050_000,
+        liquidated_equity: 1_048_400,
+        benchmark_total_return: 0.02,
+      },
+      {
+        index: 2,
+        requested_in_sample_start: "2024-04-04",
+        in_sample: period("2024-04-04", "2025-04-03", 245),
+        out_of_sample: period("2025-04-04", "2025-07-03", 61),
+        chosen: { short_window: 3, long_window: 20 },
+        in_sample_value: 0.6,
+        tie_count: 2,
+        starting_cash: 1_048_400,
+        out_of_sample_metrics: sweepMetrics(-0.2, -0.01, 0.03),
+        ended_with_shares: false,
+        final_equity: 1_037_916,
+        liquidated_equity: 1_037_916,
+        benchmark_total_return: 0.03,
+      },
+    ],
+    daily: [
+      { date: "2025-01-06", equity: 1_000_000, benchmark_equity: 1_000_000 },
+      { date: "2025-04-03", equity: 1_048_400, benchmark_equity: 1_020_000 },
+      { date: "2025-04-04", equity: 1_048_400, benchmark_equity: 1_021_000 },
+      { date: "2025-07-03", equity: 1_037_916, benchmark_equity: 1_050_000 },
+    ],
+    metrics: {
+      total_return: 0.037916,
+      annualized_return: null,
+      max_drawdown: 0.03,
+      sharpe_ratio: 0.5,
+      return_count: 3,
+      final_equity: 1_037_916,
+      liquidated_equity: 1_037_916,
+    },
+    benchmark: {
+      label: "買い持ち",
+      status: "bought",
+      signal_date: "2025-01-06",
+      fill: null,
+      skipped: null,
+      events: [],
+      metrics: { ...BENCHMARK_FLAT, total_return: 0.05, sharpe_ratio: 0.8, max_drawdown: 0.05, return_count: 3, final_equity: 1_050_000 },
+      open_position_at_end: true,
+    },
+    choice_changes: 1,
+    compared_windows: 2,
+    beats_benchmark: 1,
+    unused: { start_date: "2025-07-04", end_date: "2025-12-30", business_days: 120 },
+    notes: [{ kind: "walkforward_trials", message: "区切りごとに4通りの組み合わせを試して選んでいます" }],
+    data_info: base.data_info,
   };
 }

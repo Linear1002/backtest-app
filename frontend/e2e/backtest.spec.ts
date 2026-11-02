@@ -264,3 +264,56 @@ test("スマートフォンの幅でも、取引の記録が読める @mobile", 
   await expect(page.getByRole("table", { name: "買いから売りまでの取引の一覧" })).toBeHidden();
   await expectNoA11yViolations(page, "スマートフォンの結果");
 });
+
+test("ウォークフォワード分析:区切りの見通し → 確認 → つないだ成績と区切りごとの表(docs/walkforward.md)", async ({ page }) => {
+  await chooseSymbol(page, "ゆうなぎ", "1003");
+  await page.getByRole("radio", { name: /ウォークフォワードで確かめる/ }).check();
+  // 区切りは暦だけで決まるので、入力のたびにその場で出る
+  await expect(page.getByText("区切り5回", { exact: true })).toBeVisible();
+  await expect(page.getByText(/選ぶ期間の計算 105通り × 区切り5回 = 525回\(このエンジンでは4,000回まで\)・ほかに使う期間の計算 5回/)).toBeVisible();
+
+  // 選ぶ期間を5年にすると、約4年半のデータでは区切りが作れない。確認へ進むと、その文にフォーカスが移る
+  await page.getByRole("group", { name: /選ぶ期間/ }).getByRole("button", { name: "5年" }).click();
+  await page.getByRole("button", { name: "確認へ進む", exact: true }).click();
+  const noWindows = page.getByText(/^期間が短すぎて、選ぶ期間\(60か月\)と使う期間\(6か月\)を1回も取れません/);
+  await expect(noWindows).toBeVisible();
+  await expect(page.locator('[data-invalid-anchor="true"]')).toBeFocused();
+  await page.getByRole("group", { name: /選ぶ期間/ }).getByRole("button", { name: "2年" }).click();
+  await expect(noWindows).toHaveCount(0);
+  await expectNoA11yViolations(page, "手順3(ウォークフォワードの条件)");
+
+  await page.getByRole("button", { name: "確認へ進む", exact: true }).click();
+  await expect(page.getByRole("heading", { name: /確認してウォークフォワード分析を実行する/ })).toBeVisible();
+  await expect(page.getByRole("row", { name: /区切り/ }).first()).toContainText("5回");
+  await expect(page.getByRole("row", { name: /^計算/ })).toContainText("= 525回 + 使う期間 5回 = 530回");
+  await expectNoA11yViolations(page, "手順4(ウォークフォワードの確認)");
+  await page.getByRole("button", { name: /ウォークフォワード分析を実行/ }).click();
+  await expect(page.getByRole("heading", { name: "まとめ" })).toBeVisible({ timeout: 120_000 });
+
+  // まとめ:つないだ成績と、比べた数(この株価では最初に買い持ちを買えない)
+  const summary = page.getByRole("region", { name: "まとめ" });
+  await expect(summary).toContainText("+46.49%");
+  await expect(summary).toContainText("買えず(比べない)");
+  await expect(summary).toContainText("3回中 2回"); // 買い持ちを上回った区切り(買えた区切りだけ)
+  await expect(summary).toContainText("4回中 2回"); // 日数を選び直した回数
+  await expect(summary).toContainText("105通り");
+
+  // 区切りごとの表:5行。区切り1の選ぶ期間は、長期120日のウォームアップのぶん遅れて始まる
+  const table = page.getByRole("table", { name: /区切りごとの、選んだ日数と使う期間の成績/ });
+  await expect(table.locator("tbody tr")).toHaveCount(5);
+  await expect(table.locator("tbody tr").first()).toContainText("2022/07/01〜2024/01/03");
+  await expect(table.locator("tbody tr").nth(3)).toContainText("変更");
+
+  // チャートはキーボードで日付を動かせ、その日の区切りと選んだ日数を読み上げる
+  const slider = page.getByRole("slider", { name: "ウォークフォワードのチャートの日付" });
+  await slider.focus();
+  await page.keyboard.press("Home");
+  await expect(slider).toHaveAttribute("aria-valuetext", /^2024年1月4日.*区切り1/);
+  await expectNoA11yViolations(page, "手順5(ウォークフォワードの結果)");
+
+  // 条件を変えたら前の結果には戻れない
+  await page.getByRole("button", { name: "条件を変えて試す" }).click();
+  await expect(page.getByRole("button", { name: "5. 結果へ進む" })).toBeVisible();
+  await page.getByRole("group", { name: /使う期間/ }).getByRole("button", { name: "3か月" }).click();
+  await expect(page.getByRole("button", { name: "5. 結果へ進む" })).toHaveCount(0);
+});

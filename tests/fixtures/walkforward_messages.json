@@ -1,0 +1,105 @@
+{
+  "_説明": "ウォークフォワード分析の設定・区切り・計算の量の入力 → 誤りのメッセージ の表(docs/walkforward.md 7章の3・6・7)。画面(frontend/lib/walkforward.test.ts)と API(tests/python/test_param_contract.py)の両方がこの表を読む。walk は既定値(シャープレシオ・選ぶ期間24か月・使う期間6か月)からの変更。pairs は組み合わせの数、max_runs は計算の量の上限(Python リファレンス実装の組み合わせの上限2,000 × 2)。windows は作れる区切りの数(設定に誤りがあるときは null)。営業日が要る誤り(そろえたあとの選ぶ期間・使う期間が3営業日未満)は API だけが確かめる(tests/python/test_api_walkforward.py)。",
+  "max_runs": 4000,
+  "cases": [
+    {
+      "name": "既定(誤りなし。区切り5回)",
+      "walk": {},
+      "start": "2022-01-04",
+      "end": "2026-07-31",
+      "pairs": 105,
+      "errors": {},
+      "windows": 5
+    },
+    {
+      "name": "基準に最大ドローダウンは選べない",
+      "walk": {
+        "objective": "max_drawdown"
+      },
+      "start": "2022-01-04",
+      "end": "2026-07-31",
+      "pairs": 105,
+      "errors": {
+        "objective": "1位を選ぶ基準は、シャープレシオか総リターンを選んでください"
+      },
+      "windows": null
+    },
+    {
+      "name": "選ぶ期間が0か月・使う期間が61か月",
+      "walk": {
+        "in_sample_months": 0,
+        "out_of_sample_months": 61
+      },
+      "start": "2022-01-04",
+      "end": "2026-07-31",
+      "pairs": 105,
+      "errors": {
+        "in_sample_months": "選ぶ期間の長さは1〜120か月の整数で入力してください",
+        "out_of_sample_months": "使う期間の長さは1〜60か月の整数で入力してください"
+      },
+      "windows": null
+    },
+    {
+      "name": "選ぶ期間が121か月・使う期間が小数",
+      "walk": {
+        "in_sample_months": 121,
+        "out_of_sample_months": 2.5
+      },
+      "start": "2022-01-04",
+      "end": "2026-07-31",
+      "pairs": 105,
+      "errors": {
+        "in_sample_months": "選ぶ期間の長さは1〜120か月の整数で入力してください",
+        "out_of_sample_months": "使う期間の長さは1〜60か月の整数で入力してください"
+      },
+      "windows": null
+    },
+    {
+      "name": "上限ちょうど(120か月・60か月)は誤りではない(区切りは作れない)",
+      "walk": {
+        "in_sample_months": 120,
+        "out_of_sample_months": 60
+      },
+      "start": "2022-01-04",
+      "end": "2026-07-31",
+      "pairs": 105,
+      "errors": {
+        "windows": "期間が短すぎて、選ぶ期間(120か月)と使う期間(60か月)を1回も取れません。期間を広げるか、選ぶ期間・使う期間を短くしてください"
+      },
+      "windows": 0
+    },
+    {
+      "name": "区切りが1つも作れない",
+      "walk": {
+        "in_sample_months": 60
+      },
+      "start": "2022-01-04",
+      "end": "2026-07-31",
+      "pairs": 105,
+      "errors": {
+        "windows": "期間が短すぎて、選ぶ期間(60か月)と使う期間(6か月)を1回も取れません。期間を広げるか、選ぶ期間・使う期間を短くしてください"
+      },
+      "windows": 0
+    },
+    {
+      "name": "計算の量がちょうど上限(800通り × 区切り5回 = 4,000回)",
+      "walk": {},
+      "start": "2022-01-04",
+      "end": "2026-07-31",
+      "pairs": 800,
+      "errors": {},
+      "windows": 5
+    },
+    {
+      "name": "計算が多すぎる(801通り × 区切り5回)",
+      "walk": {},
+      "start": "2022-01-04",
+      "end": "2026-07-31",
+      "pairs": 801,
+      "errors": {
+        "grid": "計算が多すぎます(801通り × 区切り5回 = 4,005回)。このエンジンでは4,000回までです。範囲を狭める・刻みを大きくする・使う期間を長くする、のどれかをしてください"
+      },
+      "windows": 5
+    }
+  ]
+}

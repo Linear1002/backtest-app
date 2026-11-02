@@ -6,6 +6,7 @@
 - tests/fixtures/param_messages.json:入力 → 誤りのメッセージ の表。画面のテストも同じ表を読む
 - tests/fixtures/period_messages.json:期間の入力 → 誤りのメッセージ の表。画面のテストも同じ表を読む
 - tests/fixtures/sweep_messages.json:総当たりの格子の入力 → 誤りのメッセージ・組み合わせの数 の表(docs/sweep.md)
+- tests/fixtures/walkforward_messages.json:ウォークフォワードの設定・区切り・計算の量 → 誤りのメッセージ の表(docs/walkforward.md)
 """
 
 from __future__ import annotations
@@ -19,13 +20,16 @@ import pytest
 from backend.api.schemas import MaCrossParamsIn, ParamOut, SweepCostsIn, SweepGridIn
 from backend.api.validation import (
     InputValidationError,
+    check_walkforward_runs,
     validate_params,
     validate_period,
     validate_sweep_inputs,
+    walkforward_settings_errors,
 )
 from backend.marketdata.models import DateRange, SymbolId
 from backend.marketdata.synthetic import generate_bars
 from backend.strategies import STRATEGIES_BY_ID
+from engine.reference.walkforward import WalkForwardSettings, calendar_windows, no_windows_error
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 PARAMS_FILE = FIXTURES / "ma_cross_params.json"
@@ -125,6 +129,50 @@ def test_api_gives_the_same_sweep_message_as_the_screen(case: dict) -> None:
     with pytest.raises(InputValidationError) as caught:
         validate_sweep_inputs(grid_in, SweepCostsIn(), market, SWEEPS["max_pairs"])
     assert {e.field: e.message for e in caught.value.errors} == case["errors"]
+
+
+WALKS = json.loads((FIXTURES / "walkforward_messages.json").read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("case", WALKS["cases"], ids=lambda c: c["name"])
+def test_api_gives_the_same_walkforward_message_as_the_screen(case: dict) -> None:
+    """API(POST /api/walkforwards)と同じ順番で確かめる:設定 → 区切り → 計算の量。"""
+    walk = {"objective": "sharpe_ratio", "in_sample_months": 24, "out_of_sample_months": 6}
+    walk.update(case["walk"])
+    errors = {
+        e.field: e.message
+        for e in walkforward_settings_errors(
+            walk["objective"], walk["in_sample_months"], walk["out_of_sample_months"]
+        )
+    }
+    if errors:
+        assert case["windows"] is None
+        assert errors == case["errors"]
+        return
+    settings = WalkForwardSettings(**walk)
+    windows = calendar_windows(
+        dt.date.fromisoformat(case["start"]),
+        dt.date.fromisoformat(case["end"]),
+        settings.in_sample_months,
+        settings.out_of_sample_months,
+    )
+    assert len(windows) == case["windows"]
+    if not windows:
+        error = no_windows_error(settings)
+        assert {error.field: str(error)} == case["errors"]
+        return
+    if not case["errors"]:
+        check_walkforward_runs(case["pairs"], len(windows), WALKS["max_runs"])
+        return
+    with pytest.raises(InputValidationError) as caught:
+        check_walkforward_runs(case["pairs"], len(windows), WALKS["max_runs"])
+    assert {e.field: e.message for e in caught.value.errors} == case["errors"]
+
+
+def test_walkforward_run_limit_is_twice_the_sweep_limit() -> None:
+    from backend.api.routes import walkforward_max_runs
+
+    assert walkforward_max_runs(SWEEPS["max_pairs"]) == WALKS["max_runs"]
 
 
 if __name__ == "__main__":

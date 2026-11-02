@@ -2,11 +2,20 @@
 
 import { useId } from "react";
 
-import type { ParamKey, ParamSpec, SweepGridKey, SymbolDetail } from "@/lib/api.ts";
+import type { ParamKey, ParamSpec, SweepGridKey, SymbolDetail, WalkForwardObjective } from "@/lib/api.ts";
 import { describeYen, formatDate } from "@/lib/format.ts";
 import { presetPeriod, toNumber, type FieldErrors, type FormState, type RunMode } from "@/lib/form.ts";
 import { holdoutOf } from "@/lib/flow.ts";
-import { dayBefore, holdoutStart, longestWindow, parseSweepGrid, validateHoldout, type HoldoutChoice } from "@/lib/sweep.ts";
+import { dayBefore, holdoutStart, isCalendarDate, longestWindow, OBJECTIVE_LABELS, parseSweepGrid, validateHoldout, type HoldoutChoice } from "@/lib/sweep.ts";
+import {
+  calendarWindows,
+  IN_SAMPLE_CHOICES,
+  monthsText,
+  OUT_OF_SAMPLE_CHOICES,
+  WALKFORWARD_OBJECTIVES,
+  type CalendarWindow,
+  type WalkForwardForm,
+} from "@/lib/walkforward.ts";
 
 import { FieldError, PrimaryButton, StepHeading } from "../ui.tsx";
 
@@ -24,6 +33,11 @@ const PERIOD_PRESETS: { years: number | null; label: string }[] = [
 const MODES: { mode: RunMode; label: string; help: string }[] = [
   { mode: "single", label: "1組で試す", help: "短期と長期の日数を1組決めて、売買の記録まで詳しく見る" },
   { mode: "sweep", label: "総当たりで比べる", help: "日数の組み合わせをすべて試して、ヒートマップで比べる" },
+  {
+    mode: "walkforward",
+    label: "ウォークフォワードで確かめる",
+    help: "直前の期間で1位の日数を選び直しながら進めて、その選び方が通用するかを見る",
+  },
 ];
 
 const HOLDOUT_CHOICES: { choice: HoldoutChoice; label: string }[] = [
@@ -43,6 +57,7 @@ export function ParamsStep({
   errors,
   notice = null,
   sweepMaxPairs = null,
+  walkMaxRuns = null,
   onChange,
   onModeChange,
   onNext,
@@ -55,6 +70,8 @@ export function ParamsStep({
   notice?: string | null;
   /** 総当たりのエンジンの、組み合わせの数の上限(エンジンの一覧がまだなければ null) */
   sweepMaxPairs?: number | null;
+  /** ウォークフォワードの計算の量(組み合わせの数 × 区切りの数)の上限(エンジンの一覧がまだなければ null) */
+  walkMaxRuns?: number | null;
   onChange: (next: FormState) => void;
   onModeChange: (mode: RunMode) => void;
   onNext: () => void;
@@ -81,6 +98,7 @@ export function ParamsStep({
   };
   const cash = toNumber(form.params.initial_cash ?? "");
   const sweep = form.mode === "sweep";
+  const walk = form.mode === "walkforward";
 
   return (
     <section aria-labelledby={headingId}>
@@ -142,8 +160,15 @@ export function ParamsStep({
 
         <Group title="移動平均の日数" note="短期線が長期線を上に抜けたら買い、下に抜けたら売り">
           <ModeSwitch mode={form.mode} onChange={onModeChange} />
-          {sweep ? (
-            <SweepGridFields form={form} errors={errors} maxPairs={sweepMaxPairs} onChange={onChange} />
+          {sweep || walk ? (
+            <SweepGridFields
+              form={form}
+              errors={errors}
+              // ウォークフォワードの上限は、区切りの数をかけた計算の量で決まる(下の区切り方の欄に出す)
+              maxPairs={walk ? null : sweepMaxPairs}
+              walkforward={walk}
+              onChange={onChange}
+            />
           ) : (
             <>
               <div className="mt-4 flex flex-wrap gap-2">
@@ -171,6 +196,7 @@ export function ParamsStep({
         </Group>
 
         {sweep && <HoldoutFields form={form} error={errors.holdout_start_date} onChange={onChange} />}
+        {walk && <WalkForwardFields form={form} errors={errors} maxRuns={walkMaxRuns} onChange={onChange} />}
 
         <Group title="売買の費用" note="売りと買いの両方にかかります。0 にすると実際より良い結果になりやすいので注意">
           <div className="grid gap-4 sm:grid-cols-2">
@@ -195,7 +221,7 @@ export function ParamsStep({
 function ModeSwitch({ mode, onChange }: { mode: RunMode; onChange: (mode: RunMode) => void }) {
   const name = useId();
   return (
-    <div role="radiogroup" aria-label="試し方" className="grid gap-2 sm:grid-cols-2">
+    <div role="radiogroup" aria-label="試し方" className="grid gap-2 sm:grid-cols-3">
       {MODES.map((m) => (
         <label
           key={m.mode}
@@ -232,11 +258,14 @@ function SweepGridFields({
   form,
   errors,
   maxPairs,
+  walkforward = false,
   onChange,
 }: {
   form: FormState;
   errors: FieldErrors;
   maxPairs: number | null;
+  /** ウォークフォワードの格子として使う(説明の文だけが違う) */
+  walkforward?: boolean;
   onChange: (next: FormState) => void;
 }) {
   const summaryId = useId();
@@ -276,15 +305,241 @@ function SweepGridFields({
             ? `組み合わせ:${count.format(parsed.pairs)}通り(短期の日数が長期の日数より小さい組だけ)`
             : "組み合わせの数は、入力を直すと表示します")}
       </p>
-      <p className="text-[13px] leading-6 text-ink-3">
-        組み合わせごとに、選ぶ期間と検証期間を別々にバックテストします。
-        {maxPairs !== null && `このエンジンでは${count.format(maxPairs)}通りまで計算できます。`}
-        開始日より前のデータが長期の日数に足りないときは、すべての組み合わせを同じ日から比べるため、選ぶ期間の始まりを
-        {parsed.grid ? `長期${longestWindow(parsed.grid)}日` : "いちばん長い長期日数"}
-        のウォームアップがそろう日まで遅らせます。
+      {walkforward ? (
+        <p className="text-[13px] leading-6 text-ink-3">
+          区切りごとに、その選ぶ期間でこの組み合わせをすべて試し、1位の日数を次の使う期間で使います。
+          すべての組み合わせを同じ日から比べるため、データの最初から始めると、区切り1の選ぶ期間は
+          {parsed.grid ? `長期${longestWindow(parsed.grid)}日` : "いちばん長い長期日数"}
+          のウォームアップがそろう日まで遅れて始まります。
+        </p>
+      ) : (
+        <p className="text-[13px] leading-6 text-ink-3">
+          組み合わせごとに、選ぶ期間と検証期間を別々にバックテストします。
+          {maxPairs !== null && `このエンジンでは${count.format(maxPairs)}通りまで計算できます。`}
+          開始日より前のデータが長期の日数に足りないときは、すべての組み合わせを同じ日から比べるため、選ぶ期間の始まりを
+          {parsed.grid ? `長期${longestWindow(parsed.grid)}日` : "いちばん長い長期日数"}
+          のウォームアップがそろう日まで遅らせます。
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** 区切りの一覧を短くして見せるときの、最初と最後に出す数 */
+const PREVIEW_HEAD = 3;
+const PREVIEW_TAIL = 2;
+
+/** ウォークフォワードの基準・選ぶ期間・使う期間と、区切りの見通し(docs/walkforward.md 2章・3章)。 */
+function WalkForwardFields({
+  form,
+  errors,
+  maxRuns,
+  onChange,
+}: {
+  form: FormState;
+  errors: FieldErrors;
+  maxRuns: number | null;
+  onChange: (next: FormState) => void;
+}) {
+  const summaryId = useId();
+  const walk = form.walk;
+  const set = (changes: Partial<WalkForwardForm>) => onChange({ ...form, walk: { ...walk, ...changes } });
+  // 区切りは暦だけで決まるので、株価のデータがなくても前もって出せる(3章)。期間に誤りがあるときは出さない
+  const periodOk =
+    !errors.start_date && !errors.end_date && isCalendarDate(form.start_date) && isCalendarDate(form.end_date) && form.start_date <= form.end_date;
+  const windows = periodOk ? calendarWindows(form.start_date, form.end_date, walk.in_sample_months, walk.out_of_sample_months) : [];
+  const pairs = parseSweepGrid(form.sweep, null).pairs;
+  const windowsError = errors.windows;
+  return (
+    <Group
+      title="ウォークフォワードの区切り方"
+      note="直前の「選ぶ期間」で1位の日数を選び、次の「使う期間」だけその日数で売買する、を期間の最後までくり返します。使う期間をつないだ成績が、この選び方そのものの成績です"
+    >
+      <div className="space-y-4">
+        <ChoiceRow
+          label="1位を選ぶ基準"
+          error={errors.objective}
+          help="最大ドローダウンは選べません(一度も売買しない組み合わせが1位になるため)"
+        >
+          {WALKFORWARD_OBJECTIVES.map((o: WalkForwardObjective) => (
+            <Chip key={o} active={walk.objective === o} onClick={() => set({ objective: o })}>
+              {OBJECTIVE_LABELS[o]}
+            </Chip>
+          ))}
+        </ChoiceRow>
+        <ChoiceRow label="選ぶ期間(直前の何年で選ぶか)" error={errors.in_sample_months}>
+          {IN_SAMPLE_CHOICES.map((c) => (
+            <Chip key={c.months} active={walk.in_sample_months === c.months} onClick={() => set({ in_sample_months: c.months })}>
+              {c.label}
+            </Chip>
+          ))}
+        </ChoiceRow>
+        <ChoiceRow label="使う期間(選んだ日数を何か月使うか)" error={errors.out_of_sample_months}>
+          {OUT_OF_SAMPLE_CHOICES.map((c) => (
+            <Chip
+              key={c.months}
+              active={walk.out_of_sample_months === c.months}
+              onClick={() => set({ out_of_sample_months: c.months })}
+            >
+              {c.label}
+            </Chip>
+          ))}
+        </ChoiceRow>
+
+        <div
+          id={summaryId}
+          // 「区切りが作れない」はどの欄のものでもないので、確認へ進もうとしたときはここにフォーカスを移す
+          data-invalid-anchor={windowsError ? "true" : undefined}
+          tabIndex={windowsError ? -1 : undefined}
+          className="rounded-md border border-rule bg-surface px-4 py-3 outline-none"
+        >
+          {windowsError ? (
+            <p className="text-[14px] leading-6 text-shu">{windowsError}</p>
+          ) : windows.length > 0 ? (
+            <WindowPreview
+              windows={windows}
+              start={form.start_date}
+              end={form.end_date}
+              walk={walk}
+              pairs={pairs}
+              maxRuns={maxRuns}
+            />
+          ) : (
+            <p className="text-[14px] leading-6 text-ink-2">
+              {periodOk ? "" : "区切りは、期間の誤りを直すと表示します"}
+            </p>
+          )}
+        </div>
+      </div>
+    </Group>
+  );
+}
+
+/** ボタンで1つを選ぶ行(見出し・ボタン・誤り)。 */
+function ChoiceRow({
+  label,
+  help,
+  error,
+  children,
+}: {
+  label: string;
+  help?: string;
+  error?: string;
+  children: React.ReactNode;
+}) {
+  const id = useId();
+  return (
+    <div>
+      <p id={`${id}-label`} className="text-[14px] text-ink-2">
+        {label}
+      </p>
+      <div
+        role="group"
+        aria-labelledby={`${id}-label`}
+        aria-describedby={error ? `${id}-error` : undefined}
+        // 誤り(API だけが確かめるもの)があるときは、確認へ進もうとしたときにここへフォーカスを移す
+        data-invalid-anchor={error ? "true" : undefined}
+        tabIndex={error ? -1 : undefined}
+        className="mt-1 flex flex-wrap gap-2 outline-none"
+      >
+        {children}
+      </div>
+      <FieldError id={`${id}-error`} message={error} />
+      {help && <p className="mt-1 text-[12px] leading-5 text-ink-3">{help}</p>}
+    </div>
+  );
+}
+
+/** 区切りの見通し:回数・計算の量と、暦の上の並び(選ぶ期間は薄く、使う期間は濃く)。 */
+function WindowPreview({
+  windows,
+  start,
+  end,
+  walk,
+  pairs,
+  maxRuns,
+}: {
+  windows: CalendarWindow[];
+  start: string;
+  end: string;
+  walk: WalkForwardForm;
+  pairs: number | null;
+  maxRuns: number | null;
+}) {
+  const t0 = Date.parse(start);
+  const span = Math.max(1, Date.parse(end) - t0 + 86_400_000);
+  const pos = (iso: string, endOfDay = false) => ((Date.parse(iso) - t0 + (endOfDay ? 86_400_000 : 0)) / span) * 100;
+  const shown =
+    windows.length <= PREVIEW_HEAD + PREVIEW_TAIL + 1
+      ? windows
+      : [...windows.slice(0, PREVIEW_HEAD), null, ...windows.slice(-PREVIEW_TAIL)];
+  const last = windows[windows.length - 1];
+  const runs = pairs !== null ? pairs * windows.length : null;
+  return (
+    <div>
+      <p className="text-[14px] leading-6 text-ink">
+        <b>区切り{count.format(windows.length)}回</b>
+        :直前{monthsText(walk.in_sample_months)}で選び、次の{monthsText(walk.out_of_sample_months)}使う
+      </p>
+      <p className="text-[13px] leading-6 text-ink-2 tabular">
+        使う期間(つないだ期間) {formatDate(windows[0].outOfSampleStart)}〜{formatDate(last.outOfSampleEnd)}
+      </p>
+      {runs !== null && (
+        <p className="text-[13px] leading-6 text-ink-2 tabular">
+          選ぶ期間の計算 {count.format(pairs!)}通り × 区切り{count.format(windows.length)}回 = {count.format(runs)}回
+          {maxRuns !== null && `(このエンジンでは${count.format(maxRuns)}回まで)`}・ほかに使う期間の計算{" "}
+          {count.format(windows.length)}回
+        </p>
+      )}
+      {last.outOfSampleEnd < end && (
+        <p className="text-[13px] leading-6 text-ink-3 tabular">
+          {formatDate(addDay(last.outOfSampleEnd))}〜{formatDate(end)}は、使う期間({monthsText(walk.out_of_sample_months)})が丸ごと入らないので使いません
+        </p>
+      )}
+      <ol className="mt-3 space-y-1.5" aria-label="区切りの一覧">
+        {shown.map((w, i) =>
+          w === null ? (
+            <li key={`gap-${i}`} className="pl-14 text-[12px] leading-4 text-ink-3">
+              …(区切り{PREVIEW_HEAD + 1}〜{windows.length - PREVIEW_TAIL}は省略)
+            </li>
+          ) : (
+            <li key={w.index} className="grid grid-cols-[3.25rem_1fr] items-center gap-2 text-[12px]">
+              <span className="tabular text-ink-3">区切り{w.index}</span>
+              <span className="relative block h-3 rounded-sm bg-paper">
+                <span
+                  className="absolute inset-y-0 rounded-l-sm bg-rule-strong"
+                  style={{ left: `${pos(w.inSampleStart)}%`, width: `${pos(w.inSampleEnd, true) - pos(w.inSampleStart)}%` }}
+                />
+                <span
+                  className="absolute inset-y-0 rounded-r-sm bg-ink"
+                  style={{ left: `${pos(w.outOfSampleStart)}%`, width: `${pos(w.outOfSampleEnd, true) - pos(w.outOfSampleStart)}%` }}
+                />
+                <span className="sr-only">
+                  選ぶ期間 {formatDate(w.inSampleStart)}〜{formatDate(w.inSampleEnd)}、使う期間 {formatDate(w.outOfSampleStart)}〜
+                  {formatDate(w.outOfSampleEnd)}
+                </span>
+              </span>
+            </li>
+          ),
+        )}
+      </ol>
+      <p className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-ink-3" aria-hidden="true">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="inline-block h-2.5 w-4 rounded-sm bg-rule-strong" />
+          選ぶ期間(区切りごとに重なる)
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="inline-block h-2.5 w-4 rounded-sm bg-ink" />
+          使う期間(重ならずに続く)
+        </span>
       </p>
     </div>
   );
+}
+
+/** 次の日。 */
+function addDay(iso: string): string {
+  return new Date(Date.parse(`${iso}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
 }
 
 /** 検証期間(アウトオブサンプル)の決め方。 */
