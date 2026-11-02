@@ -214,6 +214,25 @@ def test_equals_the_strategy_when_it_buys_once_and_holds() -> None:
             )
         checked.append(name)
     assert len(checked) >= 20
-    assert MUST_CHECK <= set(
-        checked
-    )  # 分割・併合・売買不成立の権利落ち日をはさむケースを必ず確かめる
+    # 分割・併合・売買不成立の権利落ち日をはさむケースを必ず確かめる
+    assert MUST_CHECK <= set(checked)
+
+
+def test_equals_the_strategy_with_halted_days_before_the_signal() -> None:
+    """シグナルの前に売買不成立の営業日があり、買い持ちの期間がその日から始まっても一致する(最初の営業日は有効日でない)。
+
+    短期1日・長期2日なら D(t) = P(t) − P(t')。3日目 98 → 4・5日目は売買不成立 → 6日目 99 で上抜け(買い)、
+    7日目の始値で約定し、そのあと上がり続けるので売らない。
+    """
+    bars = make_bars(
+        [100, 99, 98, None, None, 99, 101, 103, 105],
+        opens=[100, 99, 98, None, None, 99, 101, 103, 105],
+    )
+    p = params(short=1, long=2)
+    strategy = run_backtest(bars, bars[0].date, bars[-1].date, p)
+    assert [(f.side, f.date) for f in strategy.fills] == [("buy", bars[6].date)]
+    assert strategy.fills[0].signal_date == bars[5].date
+    start = bars[3].date  # 売買不成立の日から始める
+    benchmark = run_buy_and_hold(bars, start, bars[-1].date, p)
+    assert benchmark.daily[0].date == start and benchmark.signal_date == bars[5].date
+    assert_same_from(benchmark, strategy, start, "halted days before the signal")

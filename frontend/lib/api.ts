@@ -195,11 +195,7 @@ export type BenchmarkMetrics = {
 export type BenchmarkStatus = "bought" | "insufficient_cash" | "not_bought";
 
 /** 総当たりの期間ごとの買い持ち */
-export type SegmentBenchmark = BenchmarkMetrics & {
-  status: BenchmarkStatus;
-  /** 期間の最後に株を持っていたか(清算コスト控除前) */
-  open_position_at_end: boolean;
-};
+export type SegmentBenchmark = BenchmarkMetrics & { status: BenchmarkStatus };
 
 /** 比較の基準:買い持ち(docs/benchmark.md) */
 export type Benchmark = {
