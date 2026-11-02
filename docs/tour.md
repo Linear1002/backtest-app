@@ -190,3 +190,41 @@ flowchart LR
 - 画面で `DEMO:1003` を「総当たりで比べる」で実行し、選ぶ期間の1位が検証期間で何位だったかを見る。検証期間の開始日を変えると、1位や順位相関はどう変わるか
 - `uv run python -m engine.reference.sweep_cli tests/golden/sweeps/s02_demo1003_holdout/input /tmp/sweep-out` で正解データと同じ計算を動かし、
   `uv run python -m engine.reference.sweep_cli tests/golden/sweeps/s02_demo1003_holdout/expected /tmp/sweep-out --compare` で正解と比べる(C++ 版の総当たりもこの形で答え合わせする。総当たり 11章)
+
+## 10. ウォークフォワード分析の流れ
+
+仕様は `docs/walkforward.md`(このガイドでは「ウォークフォワード 3章」のように書く)。総当たり(9章)を区切りごとに何度も行い、
+**選ぶ期間で1位を選ぶ → 次の使う期間だけその日数で売買する** を繰り返して、使う期間だけをつなぐ。重い計算(すべての区切りの選ぶ期間の総当たり)は、総当たりと同じジョブで並列にする。
+
+```mermaid
+flowchart LR
+  P["ParamsStep.tsx<br/>格子・基準・選ぶ期間・使う期間<br/>(区切りの見通し)"] --> WC["WalkForwardConfirmStep.tsx<br/>確認・途中経過・中止"]
+  WC -- "POST /api/walkforwards" --> RT["routes.py<br/>start_walkforward"]
+  RT --> JOB["sweeps.py<br/>ジョブ(kind=walkforward)"]
+  JOB --> IS["すべての区切りの選ぶ期間<br/>× すべての組み合わせ"]
+  IS --> AS["walkforward.py<br/>assemble_walkforward"]
+  AS --> CV["walkforward_convert.py<br/>JSON・注記"]
+  CV --> V["WalkForwardView.tsx<br/>まとめ・チャート・区切りの表"]
+```
+
+| ファイル | 役割 | 読むときのポイント |
+|---|---|---|
+| `engine/reference/walkforward.py` | **ウォークフォワードの正解**。月の足し方(`add_months`)、暦だけで決まる区切り(`calendar_windows`)、選ぶ期間の始まりをそろえて営業日を確かめる(`make_windows`)、1位の選び方(`choose`)、区切りでの清算(`liquidated`)、使う期間の計算(`run_window`)、つなぎ方(`assemble_walkforward`)、全部を順番に(`run_walkforward`) | 区切りはいつも開始日から月を足して決める(前の区切りから足し重ねると、1/31 → 2/28 → 3/28 と月末がずれていく。ウォークフォワード 3章)。選ぶときに使うのは**その区切りの選ぶ期間の値だけ**。同率1位は組み合わせの順番で最初のもの、全部算出不可なら選ばず現金のまま(4章) |
+| `backend/api/routes.py` の `start_walkforward` | 入力チェック(格子・費用・設定 → 期間 → 区切り → 計算の量 → データの異常)→ 総当たりと同じジョブを始める | 選ぶ期間の計算(重い)はプロセスで並列、選んで・使う期間を計算して・つなぐ(軽い)のはジョブのスレッドで(`build`) |
+| `backend/api/validation.py` の `walkforward_settings_errors`・`check_walkforward_runs` | 基準・長さ・計算の量の入力チェック。画面の `lib/walkforward.ts` と同じ文(`tests/fixtures/walkforward_messages.json`) | 計算の量の上限は「組み合わせの数 × 区切りの数」で、総当たりの組み合わせの上限の2倍(9章) |
+| `backend/api/walkforward_convert.py` | 結果 → JSON。注記(つなぎ方・試した数・清算・使わなかった日・同率・選ばなかった区切り) | |
+| `frontend/lib/walkforward.ts` | 区切りの計算(Python と同じ。`tests/fixtures/walkforward_windows.json` を両方のテストが読む)と入力チェック | 区切りは暦だけで決まるので、株価がなくても画面がその場で見通しを出せる(3章) |
+| `frontend/lib/sweepJob.ts` | 総当たりと共通のジョブの動かし方(`runJob`)。呼ぶ URL だけが違う | |
+| `frontend/components/walkforward/` | `WalkForwardView.tsx`(まとめ・区切りごとの表・注意)と `WalkForwardChart.tsx`(つないだ資産額と買い持ち。区切りごとに背景を塗り分ける) | 区切りの表の「変更」:前の区切りと違う日数を選んだ区切り。毎回変わるなら、その時々のたまたまを追いかけている可能性がある(8章) |
+
+**ウォークフォワード1回で起きること**
+
+1. 画面:「ウォークフォワード分析を実行」→ `runWalkForward()` → `runWalkForwardJob()` → `POST /api/walkforwards`(すぐに `202` とジョブの番号)
+2. API:入力チェック → 区切りを作り、区切りごとに選ぶ期間の始まりをそろえる(`validate_walkforward`)→ ジョブ:組み合わせごとに、すべての区切りの選ぶ期間を計算する(途中経過の数は組み合わせの数)
+3. 計算が終わったら、区切りの順に:選ぶ期間の値で1位を選ぶ → 前の区切りの清算したあとの額を初期資金にして、使う期間を1組のバックテストとして計算 → 最終日に清算
+4. 使う期間の資産額をつなぎ、つないだ期間全体の買い持ちと並べる → JSON → 画面(`WalkForwardView.tsx`)
+
+**手を動かして確かめる**
+
+- 画面で `DEMO:1003` を「ウォークフォワードで確かめる」で実行し、区切りごとの表で、選んだ日数がどう変わったかを見る。選ぶ期間を「1年」「3年」に変えると、つないだ成績と選び直した回数はどう変わるか
+- `uv run pytest tests/python/test_reference_walkforward.py -q` を読む。「区切りが1つなら、つないだ成績は(最後の清算を除いて)その使う期間の1組のバックテストと一致する」「使う期間のデータを書き換えても、選ぶ組み合わせは変わらない」などのテストがある

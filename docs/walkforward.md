@@ -154,6 +154,8 @@ DELETE /api/walkforwards/{id}   中止する
 - 使う期間:1組のバックテストと完全に一致すること。清算の式と、次の区切りの初期資金
 - つなぎ方:区切りが1つなら、つないだ成績は(最後の清算を除いて)その使う期間の1組のバックテストと一致すること
 - API の結果が、リファレンス実装(`engine/reference/walkforward.py`)を順番に計算した結果と一致すること
+- 入力チェックの文:設定・区切りが作れない・計算が多すぎる、の表(`tests/fixtures/walkforward_messages.json` を API と画面の両方のテストが読む)
+- 画面〜API〜計算:通しのテスト(`frontend/e2e/backtest.spec.ts`)で、DEMO:1003 の既定の条件の結果とアクセシビリティを確かめる
 
 ## 12. 既知の限界
 

@@ -252,11 +252,12 @@ function WindowTable({ result }: { result: WalkForwardResult }) {
       <p className="mt-1 text-[13px] leading-6 text-ink-2">
         選ぶ期間({monthsText(result.in_sample_months)})の{OBJECTIVE_LABELS[objective]}で選んだ日数と、それを使った期間(
         {monthsText(result.out_of_sample_months)})の成績です。「変更」は前の区切りと違う日数を選んだ区切りです。
+        「完了した取引」は買って売るまで終わった取引の数で、使う期間の最後に持っていた株は「持ち越し」として最終日に清算しています。
       </p>
       <ScrollRegion label="区切りごとの結果の表" className="mt-3 overflow-x-auto">
-        <table className="w-full min-w-[56rem] border-y border-rule text-[14px] tabular">
+        <table className="w-full min-w-[48rem] border-y border-rule text-[14px] tabular">
           <caption className="sr-only">区切りごとの、選んだ日数と使う期間の成績</caption>
-          <thead className="text-[12px] text-ink-3">
+          <thead className="whitespace-nowrap text-[12px] text-ink-3">
             <tr className="border-b border-rule">
               <th scope="col" className="py-2 pr-3 text-left font-normal">
                 区切り
@@ -280,7 +281,7 @@ function WindowTable({ result }: { result: WalkForwardResult }) {
                 買い持ち
               </th>
               <th scope="col" className="py-2 pr-3 text-right font-normal">
-                取引
+                完了した取引
               </th>
               <th scope="col" className="py-2 text-right font-normal">
                 清算したあとの資産
@@ -297,8 +298,8 @@ function WindowTable({ result }: { result: WalkForwardResult }) {
                   <th scope="row" className="py-2 pr-3 text-left font-normal text-ink-2">
                     {w.index}
                   </th>
-                  <td className="whitespace-nowrap py-2 pr-3 text-ink-2">
-                    {formatDate(w.in_sample.start_date)}〜{formatDate(w.in_sample.end_date)}
+                  <td className="whitespace-nowrap py-2 pr-3 text-[13px] leading-5 text-ink-2">
+                    <PeriodCell start={w.in_sample.start_date} end={w.in_sample.end_date} />
                   </td>
                   <td className="whitespace-nowrap py-2 pr-3 text-ink">
                     {w.chosen ? (
@@ -316,15 +317,24 @@ function WindowTable({ result }: { result: WalkForwardResult }) {
                     )}
                   </td>
                   <td className="py-2 pr-3 text-right text-ink-2">{formatObjective(w.in_sample_value, objective)}</td>
-                  <td className="whitespace-nowrap py-2 pr-3 text-ink-2">
-                    {formatDate(w.out_of_sample.start_date)}〜{formatDate(w.out_of_sample.end_date)}
+                  <td className="whitespace-nowrap py-2 pr-3 text-[13px] leading-5 text-ink-2">
+                    <PeriodCell start={w.out_of_sample.start_date} end={w.out_of_sample.end_date} />
                   </td>
                   <td className={`py-2 pr-3 text-right font-bold ${TONE[direction(ret)]}`}>{formatPercent(ret, { signed: true })}</td>
                   <td className="whitespace-nowrap py-2 pr-3 text-right text-ink-2">
-                    {w.benchmark_total_return === null ? "買えず" : formatPercent(w.benchmark_total_return, { signed: true })}
-                    <span className={`block text-[11px] ${versus.tone}`}>{versus.text}</span>
+                    {w.benchmark_total_return === null ? (
+                      "買えず"
+                    ) : (
+                      <>
+                        {formatPercent(w.benchmark_total_return, { signed: true })}
+                        <span className={`block text-[11px] ${versus.tone}`}>{versus.text}</span>
+                      </>
+                    )}
                   </td>
-                  <td className="py-2 pr-3 text-right text-ink-2">{count.format(w.out_of_sample_metrics.trade_count)}回</td>
+                  <td className="py-2 pr-3 text-right text-ink-2">
+                    {count.format(w.out_of_sample_metrics.trade_count)}回
+                    {w.ended_with_shares && <span className="block whitespace-nowrap text-[11px] text-ink-3">ほか持ち越し1回</span>}
+                  </td>
                   <td className="whitespace-nowrap py-2 text-right text-ink">
                     {formatYen(w.liquidated_equity)}
                     {w.ended_with_shares && <span className="block text-[11px] text-ink-3">最終日に清算</span>}
@@ -336,6 +346,15 @@ function WindowTable({ result }: { result: WalkForwardResult }) {
         </table>
       </ScrollRegion>
     </section>
+  );
+}
+
+/** 期間を2行で(表の幅を取らないように)。 */
+function PeriodCell({ start, end }: { start: string; end: string }) {
+  return (
+    <>
+      {formatDate(start)}〜<span className="block">{formatDate(end)}</span>
+    </>
   );
 }
 

@@ -21,10 +21,14 @@
 - **パラメータの総当たり**:移動平均の日数の組み合わせ(既定 105通り、最大 2,000通り)をまとめて試し、ヒートマップと順位で比べる。
   期間の最後を「検証期間」として取っておき、選ぶのに使っていない期間の成績も並べる(過剰最適化への備え。`docs/sweep.md`)。
   気になるマスを選ぶと、その組み合わせの売買の記録まで見られる
+- **ウォークフォワード分析**:「直前の2年で1位の日数を選び、次の半年だけ使う」を期間の最後まで繰り返し、使った期間だけをつないだ成績を出す。
+  どの日も、その日より前のデータだけで選んだ日数で売買するので、**選び方そのもの**が通用するかが分かる(`docs/walkforward.md`)
 - **データ**:J-Quants API(東証。APIキーが必要)と、APIキーなしで動く架空データ12銘柄
 - いまの売買ルールは移動平均クロス(MVP)。ほかのルールは今後追加する
 
 ![総当たりの結果(架空データ DEMO:1003。105通り。選ぶ期間の1位は、検証期間では105通り中74位)](docs/images/sweep-desktop.png)
+
+![ウォークフォワード分析の結果(架空データ DEMO:1003。直前2年で選び、次の6か月使う、を5回。つないだ総リターン +46.49%)](docs/images/walkforward-desktop.png)
 
 ## こだわったところ:結果が正しいこと
 
@@ -95,6 +99,7 @@ make e2e          # 画面〜API の通しのテスト(Playwright)
 | 株価データ・Python リファレンス・API・画面 | できた |
 | パラメータの総当たり(仕様 `docs/sweep.md`・Python 版・正解データ24ケース・API・画面) | できた(計算は Python を複数のプロセスで) |
 | 買い持ちとの比較(仕様 `docs/benchmark.md`・Python 版・API・画面) | できた |
+| ウォークフォワード分析(仕様 `docs/walkforward.md`・Python 版・API・画面) | できた(計算は総当たりと同じジョブの仕組み) |
 | C++ 版エンジン | **作者が自分で書いている**(手順:`docs/cpp/README.md`。正解データとの答え合わせは CI で自動) |
 | C++ 版・GPU 版の総当たり | 計画(`docs/gpu-plan.md`。正解データと、API に差し込む場所は用意してある) |
 
@@ -105,6 +110,8 @@ make e2e          # 画面〜API の通しのテスト(Playwright)
 | `docs/mvp.md` | MVP の仕様(計算の決まりの正) |
 | `docs/sweep.md` | パラメータの総当たりの仕様(格子・選ぶ期間と検証期間・並べ方・API) |
 | `docs/benchmark.md` | 比較の基準(買い持ち)の仕様 |
+| `docs/walkforward.md` | ウォークフォワード分析の仕様(区切り方・選び方・つなぎ方・API) |
+| `docs/study.md` | 学習ガイド(読む順番・手で追う演習・確かめの問いと答え) |
 | `docs/tour.md` | コードの読み方ガイド(1回のバックテストがどのファイルを通るか) |
 | `docs/data.md` | 株価データの取得・保存と、利用規約 |
 | `docs/cpp/README.md`・`docs/cpp/contract.md` | C++ 版を書く道のり(マイルストーン M0〜M8)と入出力の約束 |
@@ -132,6 +139,7 @@ A Japanese-language web app for backtesting trading rules on Japanese equities, 
 - **Spec-first**: `docs/mvp.md` specifies every rule down to summation order, rounding and error precedence.
 - **Three-tier correctness**: a slow, readable Python reference engine is the oracle; the C++ engine (being written by the author) must match it on 60 golden cases (exact for dates, share counts and win/loss; 1e-9 relative tolerance for amounts — or bit-for-bit in strict mode), and a future CUDA parameter sweep must match the C++ engine.
 - **Parameter sweep with an honest holdout**: grid search over moving-average windows (up to 2,000 pairs in Python, run as a cancellable background job across processes), ranked on an in-sample period only and re-tested on a held-out period. The UI leads with the number of trials, the in-sample winner's out-of-sample rank and the Spearman rank correlation between the two periods, so a lucky winner is visible as such (`docs/sweep.md`, 24 golden sweep cases).
+- **Walk-forward analysis**: re-select the windows on a rolling in-sample period (e.g. 2 years), trade them on the next out-of-sample period (e.g. 6 months), and stitch only the out-of-sample periods together, so every day is traded with windows chosen from earlier data only. Windows are calendar-anchored to the start date (no month-end drift), each in-sample period is aligned to the longest warm-up, and positions are liquidated at window boundaries with full costs (`docs/walkforward.md`; the same window table is checked by both the Python and TypeScript tests).
 - **A benchmark you can't skip**: every result is shown next to buy-and-hold over the same period with the same costs, computed with the same fill, sizing, split, valuation and metric functions as the strategy (and verified to match the strategy exactly whenever the strategy happens to buy once and hold) (`docs/benchmark.md`).
 - **Stack**: Next.js/TypeScript (hand-drawn SVG charts and an ARIA-grid heatmap), FastAPI, J-Quants API with rate limiting and Parquet caching, pytest/GoogleTest/node:test/Playwright with automated WCAG checks, GitHub Actions CI.
 - **AI collaboration, stated honestly**: the UI, API, data layer and reference engine were written with Claude Code under the author's review; the C++/CUDA engines are the author's own work.
